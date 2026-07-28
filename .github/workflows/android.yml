@@ -12,11 +12,6 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    env:
-      CI_KEYSTORE_PATH: ${{ runner.temp }}/miuixreader-ci.jks
-      CI_KEYSTORE_PASSWORD: ${{ secrets.CI_KEYSTORE_PASSWORD }}
-      CI_KEY_ALIAS: ${{ secrets.CI_KEY_ALIAS }}
-      CI_KEY_PASSWORD: ${{ secrets.CI_KEY_PASSWORD }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -49,6 +44,7 @@ jobs:
 
       - name: Set up fixed CI signing key
         env:
+          CI_KEYSTORE_PATH: ${{ runner.temp }}/miuixreader-ci.jks
           KEYSTORE_BASE64: ${{ secrets.CI_KEYSTORE_BASE64 }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
@@ -56,6 +52,11 @@ jobs:
           fi
 
       - name: Run verification
+        env:
+          CI_KEYSTORE_PATH: ${{ runner.temp }}/miuixreader-ci.jks
+          CI_KEYSTORE_PASSWORD: ${{ secrets.CI_KEYSTORE_PASSWORD }}
+          CI_KEY_ALIAS: ${{ secrets.CI_KEY_ALIAS }}
+          CI_KEY_PASSWORD: ${{ secrets.CI_KEY_PASSWORD }}
         run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --stacktrace
 
       - name: Upload Debug APK
