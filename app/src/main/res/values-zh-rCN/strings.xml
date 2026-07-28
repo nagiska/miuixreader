@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Miuix Reader</string>
+    <string name="bookshelf_title">书架</string>
+    <string name="bookshelf_empty">书架还是空的。</string>
+    <string name="bookshelf_empty_short">暂无书籍</string>
+    <plurals name="books_count">
+        <item quantity="other">%1$d 本书</item>
+    </plurals>
+    <string name="import_books">导入书籍</string>
+    <string name="importing">正在导入书籍...</string>
+    <string name="import_summary">已导入 %1$d 本 - 跳过 %2$d 本 - 失败 %3$d 本</string>
+    <string name="search">搜索</string>
+    <string name="search_hint">搜索书名或作者</string>
+    <string name="search_empty">没有匹配的书籍</string>
+    <string name="close">关闭</string>
+    <string name="settings">设置</string>
+    <string name="back">返回</string>
+    <string name="appearance">外观</string>
+    <string name="liquid_glass">液态玻璃</string>
+    <string name="liquid_glass_summary">在书架表面使用 Backdrop 玻璃效果</string>
+    <string name="delete">删除</string>
+    <string name="cancel">取消</string>
+    <string name="delete_book_title">删除这本书？</string>
+    <string name="reader_loading">正在打开...</string>
+    <string name="reader_book_missing">这本书已不可用。</string>
+    <string name="reader_open_failed">无法打开这本书。</string>
+    <string name="reader_format_unsupported">不支持此出版物格式。</string>
+</resources>

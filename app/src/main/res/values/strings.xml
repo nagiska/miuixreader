@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Miuix Reader</string>
+    <string name="bookshelf_title">Bookshelf</string>
+    <string name="bookshelf_empty">Your library is empty.</string>
+    <string name="bookshelf_empty_short">No books yet</string>
+    <plurals name="books_count">
+        <item quantity="one">%1$d book</item>
+        <item quantity="other">%1$d books</item>
+    </plurals>
+    <string name="import_books">Import books</string>
+    <string name="importing">Importing books...</string>
+    <string name="import_summary">%1$d imported - %2$d skipped - %3$d failed</string>
+    <string name="search">Search</string>
+    <string name="search_hint">Search title or author</string>
+    <string name="search_empty">No matching books</string>
+    <string name="close">Close</string>
+    <string name="settings">Settings</string>
+    <string name="back">Back</string>
+    <string name="appearance">Appearance</string>
+    <string name="liquid_glass">Liquid glass</string>
+    <string name="liquid_glass_summary">Use Backdrop glass surfaces on the bookshelf</string>
+    <string name="delete">Delete</string>
+    <string name="cancel">Cancel</string>
+    <string name="delete_book_title">Delete this book?</string>
+    <string name="reader_loading">Opening...</string>
+    <string name="reader_book_missing">This book is no longer available.</string>
+    <string name="reader_open_failed">Could not open this book.</string>
+    <string name="reader_format_unsupported">This publication format is not supported.</string>
+</resources>
