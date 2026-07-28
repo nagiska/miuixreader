@@ -1,5 +1,7 @@
 package io.github.nagiska.miuixreader
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -56,8 +58,10 @@ import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Publication
 import org.readium.r2.shared.publication.allAreHtml
+import org.readium.r2.shared.util.AbsoluteUrl
 import org.readium.r2.shared.util.asset.AssetRetriever
 import org.readium.r2.shared.util.http.DefaultHttpClient
+import org.readium.r2.shared.util.toUri
 import org.readium.r2.streamer.PublicationOpener
 import org.readium.r2.streamer.parser.DefaultPublicationParser
 import top.yukonga.miuix.kmp.icon.extended.Back
@@ -121,7 +125,16 @@ class ReaderActivity : FragmentActivity() {
                 null
             }
         }
-        val epubListener = object : EpubNavigatorFragment.Listener {}
+        val epubListener = object : EpubNavigatorFragment.Listener {
+            override fun onExternalLinkActivated(url: AbsoluteUrl) {
+                if (!url.isHttp) return
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
+                } catch (_: ActivityNotFoundException) {
+                    // The publication remains open when no browser is available.
+                }
+            }
+        }
         val pdfListener = object : PdfNavigatorFragment.Listener {}
         val imageListener = object : ImageNavigatorFragment.Listener {}
         val readerType = try {

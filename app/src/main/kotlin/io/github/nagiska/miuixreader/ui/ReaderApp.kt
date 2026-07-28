@@ -293,13 +293,14 @@ private fun BookRow(
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val darkTheme = isSystemInDarkTheme()
     val glassModifier = if (liquidGlassEnabled) {
         Modifier.drawBackdrop(
             backdrop = backdrop,
             shape = { RoundedCornerShape(8.dp) },
             effects = { blur(12.dp.toPx()) },
             onDrawSurface = {
-                drawRect(Color.White.copy(alpha = if (isSystemInDarkTheme()) 0.08f else 0.42f))
+                drawRect(Color.White.copy(alpha = if (darkTheme) 0.08f else 0.42f))
             },
         )
     } else {
