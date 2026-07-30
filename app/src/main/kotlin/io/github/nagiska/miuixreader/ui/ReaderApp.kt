@@ -2,7 +2,6 @@ package io.github.nagiska.miuixreader.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -34,6 +34,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
@@ -47,7 +48,11 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import io.github.nagiska.miuixreader.R
+import io.github.nagiska.miuixreader.data.AppThemeMode
+import io.github.nagiska.miuixreader.data.BackgroundTarget
 import io.github.nagiska.miuixreader.data.BookEntity
+import io.github.nagiska.miuixreader.data.ReaderBackgroundMode
+import io.github.nagiska.miuixreader.data.ReaderPreferences
 import io.github.nagiska.miuixreader.data.bookFormat
 import io.github.nagiska.miuixreader.ui.theme.ReaderTheme
 import java.util.Locale
@@ -59,6 +64,7 @@ import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
+import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TopAppBar
@@ -67,16 +73,20 @@ import top.yukonga.miuix.kmp.icon.extended.Add
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.icon.extended.Delete
+import top.yukonga.miuix.kmp.icon.extended.Image
 import top.yukonga.miuix.kmp.icon.extended.Search
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.utils.PressFeedbackType
 
 @Composable
 fun ReaderApp(
     viewModel: LibraryViewModel,
     onImport: () -> Unit,
     onOpen: (BookEntity) -> Unit,
+    onImportBookshelfBackground: () -> Unit,
+    onImportReaderBackground: () -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var settingsVisible by rememberSaveable { mutableStateOf(false) }
@@ -96,27 +106,34 @@ fun ReaderApp(
         searchVisible = false
     }
 
-    ReaderTheme {
-        Scaffold { _ ->
+    ReaderTheme(themeMode = state.preferences.themeMode) {
+        Scaffold(containerColor = Color.Transparent) { _ ->
             Box(Modifier.fillMaxSize()) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(if (isSystemInDarkTheme()) Color(0xFF111214) else Color(0xFFF5F6F8))
-                        .then(
-                            if (state.liquidGlassEnabled) Modifier.layerBackdrop(backdrop) else Modifier,
-                        ),
+                HomeBackground(
+                    path = state.preferences.bookshelfBackgroundPath,
+                    scrim = state.preferences.bookshelfBackgroundScrim,
+                    backdrop = backdrop,
                 )
                 if (settingsVisible) {
                     SettingsScreen(
-                        liquidGlassEnabled = state.liquidGlassEnabled,
+                        preferences = state.preferences,
+                        backdrop = backdrop,
                         onLiquidGlassChange = viewModel::setLiquidGlassEnabled,
+                        onThemeModeChange = viewModel::setThemeMode,
+                        onImportBookshelfBackground = onImportBookshelfBackground,
+                        onImportReaderBackground = onImportReaderBackground,
+                        onClearBookshelfBackground = {
+                            viewModel.clearBackground(BackgroundTarget.BOOKSHELF)
+                        },
+                        onClearReaderBackground = {
+                            viewModel.clearBackground(BackgroundTarget.READER)
+                        },
                         onBack = { settingsVisible = false },
                     )
                 } else {
                     BookshelfScreen(
                         state = state,
-                        liquidGlassEnabled = state.liquidGlassEnabled,
+                        liquidGlassEnabled = state.preferences.liquidGlassEnabled,
                         backdrop = backdrop,
                         searchVisible = searchVisible,
                         onSearchVisibleChange = { searchVisible = it },
@@ -157,6 +174,34 @@ fun ReaderApp(
 }
 
 @Composable
+private fun HomeBackground(
+    path: String?,
+    scrim: Float,
+    backdrop: LayerBackdrop,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .layerBackdrop(backdrop)
+            .background(MiuixTheme.colorScheme.surface),
+    ) {
+        if (path != null) {
+            AsyncImage(
+                model = path,
+                contentDescription = null,
+                modifier = Modifier.matchParentSize(),
+                contentScale = ContentScale.Crop,
+            )
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(Color.Black.copy(alpha = scrim.coerceIn(0f, 0.9f))),
+            )
+        }
+    }
+}
+
+@Composable
 private fun BookshelfScreen(
     state: LibraryUiState,
     liquidGlassEnabled: Boolean,
@@ -169,10 +214,26 @@ private fun BookshelfScreen(
     onDelete: (BookEntity) -> Unit,
     onSettings: () -> Unit,
 ) {
+    val hasBackgroundImage = state.preferences.bookshelfBackgroundPath != null
+    val glassColor = glassSurfaceColor()
+    val topBarModifier = if (liquidGlassEnabled && hasBackgroundImage) {
+        Modifier.drawBackdrop(
+            backdrop = backdrop,
+            shape = { RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp) },
+            effects = { blur(16.dp.toPx()) },
+            onDrawSurface = { drawRect(glassColor) },
+        )
+    } else {
+        Modifier.background(MiuixTheme.colorScheme.surface.copy(alpha = 0.96f))
+    }
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
-            Column {
-                TopAppBar(title = stringResourceCompat(R.string.bookshelf_title))
+            Column(modifier = topBarModifier) {
+                TopAppBar(
+                    title = stringResourceCompat(R.string.bookshelf_title),
+                    color = topBarColor(liquidGlassEnabled && hasBackgroundImage),
+                )
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -216,11 +277,16 @@ private fun BookshelfScreen(
         Box(Modifier.fillMaxSize().padding(paddingValues)) {
             if (state.books.isEmpty()) {
                 if (state.query.isBlank()) {
-                    EmptyShelf(onImport = onImport, modifier = Modifier.align(Alignment.Center))
+                    EmptyShelf(
+                        onImport = onImport,
+                        contentColor = if (hasBackgroundImage) Color.White else MiuixTheme.colorScheme.onBackground,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
                 } else {
                     Text(
                         text = stringResourceCompat(R.string.search_empty),
                         modifier = Modifier.align(Alignment.Center),
+                        color = if (hasBackgroundImage) Color.White else MiuixTheme.colorScheme.onBackground,
                     )
                 }
             } else {
@@ -251,7 +317,7 @@ private fun BookshelfScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     if (state.isImporting) {
-                        Card(cornerRadius = 8.dp) {
+                        Card {
                             Text(
                                 text = stringResourceCompat(R.string.importing),
                                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
@@ -259,7 +325,7 @@ private fun BookshelfScreen(
                         }
                     }
                     state.message?.let { message ->
-                        Card(cornerRadius = 8.dp) {
+                        Card {
                             Text(message, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
                         }
                     }
@@ -270,13 +336,17 @@ private fun BookshelfScreen(
 }
 
 @Composable
-private fun EmptyShelf(onImport: () -> Unit, modifier: Modifier = Modifier) {
+private fun EmptyShelf(
+    onImport: () -> Unit,
+    contentColor: Color,
+    modifier: Modifier = Modifier,
+) {
     Column(
         modifier = modifier.padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(stringResourceCompat(R.string.bookshelf_empty))
+        Text(stringResourceCompat(R.string.bookshelf_empty), color = contentColor)
         Button(onClick = onImport) {
             Icon(MiuixIcons.Add, contentDescription = null)
             Spacer(Modifier.width(8.dp))
@@ -293,14 +363,14 @@ private fun BookRow(
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val darkTheme = isSystemInDarkTheme()
+    val glassColor = glassSurfaceColor()
     val glassModifier = if (liquidGlassEnabled) {
         Modifier.drawBackdrop(
             backdrop = backdrop,
             shape = { RoundedCornerShape(8.dp) },
             effects = { blur(12.dp.toPx()) },
             onDrawSurface = {
-                drawRect(Color.White.copy(alpha = if (darkTheme) 0.08f else 0.42f))
+                drawRect(glassColor)
             },
         )
     } else {
@@ -310,12 +380,13 @@ private fun BookRow(
         modifier = Modifier
             .fillMaxWidth()
             .then(glassModifier),
-        cornerRadius = 8.dp,
         colors = if (liquidGlassEnabled) {
             CardDefaults.defaultColors(color = Color.Transparent)
         } else {
             CardDefaults.defaultColors()
         },
+        cornerRadius = 8.dp,
+        pressFeedbackType = PressFeedbackType.Sink,
         onClick = onClick,
     ) {
         Row(
@@ -335,7 +406,7 @@ private fun BookRow(
                     modifier = Modifier
                         .size(width = 58.dp, height = 82.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .background(if (isSystemInDarkTheme()) Color(0xFF303238) else Color(0xFFE3E7ED)),
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(book.bookFormat.label, style = MiuixTheme.textStyles.body2)
@@ -380,7 +451,7 @@ private fun SearchField(
         modifier = modifier
             .height(44.dp)
             .background(
-                if (isSystemInDarkTheme()) Color(0xFF25272C) else Color(0xFFE8EBF0),
+                MiuixTheme.colorScheme.surfaceContainerHigh,
                 RoundedCornerShape(14.dp),
             )
             .padding(start = 14.dp, end = 4.dp),
@@ -410,14 +481,50 @@ private fun SearchField(
 
 @Composable
 private fun SettingsScreen(
-    liquidGlassEnabled: Boolean,
+    preferences: ReaderPreferences,
+    backdrop: LayerBackdrop,
     onLiquidGlassChange: (Boolean) -> Unit,
+    onThemeModeChange: (AppThemeMode) -> Unit,
+    onImportBookshelfBackground: () -> Unit,
+    onImportReaderBackground: () -> Unit,
+    onClearBookshelfBackground: () -> Unit,
+    onClearReaderBackground: () -> Unit,
     onBack: () -> Unit,
 ) {
+    val glassEnabled = preferences.liquidGlassEnabled
+    val hasBackgroundImage = preferences.bookshelfBackgroundPath != null
+    val glassColor = glassSurfaceColor()
+    val topBarModifier = if (glassEnabled && hasBackgroundImage) {
+        Modifier.drawBackdrop(
+            backdrop = backdrop,
+            shape = { RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp) },
+            effects = { blur(16.dp.toPx()) },
+            onDrawSurface = { drawRect(glassColor) },
+        )
+    } else {
+        Modifier
+    }
+    val appearanceCardModifier = if (glassEnabled) {
+        Modifier.drawBackdrop(
+            backdrop = backdrop,
+            shape = { RoundedCornerShape(8.dp) },
+            effects = { blur(12.dp.toPx()) },
+            onDrawSurface = { drawRect(glassColor) },
+        )
+    } else {
+        Modifier
+    }
     Scaffold(
+        containerColor = if (hasBackgroundImage) {
+            MiuixTheme.colorScheme.background.copy(alpha = 0.76f)
+        } else {
+            Color.Transparent
+        },
         topBar = {
             TopAppBar(
                 title = stringResourceCompat(R.string.settings),
+                modifier = topBarModifier,
+                color = topBarColor(glassEnabled && hasBackgroundImage),
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(MiuixIcons.Back, contentDescription = stringResourceCompat(R.string.back))
@@ -431,22 +538,153 @@ private fun SettingsScreen(
         ) {
             SmallTitle(text = stringResourceCompat(R.string.appearance))
             Card(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+                    .then(appearanceCardModifier),
+                colors = settingsCardColors(glassEnabled),
                 cornerRadius = 8.dp,
             ) {
+                Text(
+                    text = stringResourceCompat(R.string.theme_mode),
+                    modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp),
+                    style = MiuixTheme.textStyles.body1.copy(fontWeight = FontWeight.Medium),
+                )
+                TabRowWithContour(
+                    tabs = listOf(
+                        stringResourceCompat(R.string.theme_system),
+                        stringResourceCompat(R.string.theme_light),
+                        stringResourceCompat(R.string.theme_dark),
+                    ),
+                    selectedTabIndex = preferences.themeMode.ordinal,
+                    onTabSelected = { index ->
+                        AppThemeMode.entries.getOrNull(index)?.let(onThemeModeChange)
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                )
                 SwitchPreference(
                     title = stringResourceCompat(R.string.liquid_glass),
                     summary = stringResourceCompat(R.string.liquid_glass_summary),
-                    checked = liquidGlassEnabled,
+                    checked = glassEnabled,
                     onCheckedChange = onLiquidGlassChange,
                 )
+            }
+            SmallTitle(text = stringResourceCompat(R.string.backgrounds))
+            BackgroundPreferenceCard(
+                title = stringResourceCompat(R.string.bookshelf_background),
+                summary = stringResourceCompat(
+                    if (preferences.bookshelfBackgroundPath == null) {
+                        R.string.background_default
+                    } else {
+                        R.string.background_custom
+                    },
+                ),
+                imagePath = preferences.bookshelfBackgroundPath,
+                liquidGlassEnabled = glassEnabled,
+                backdrop = backdrop,
+                onClick = onImportBookshelfBackground,
+                onClear = onClearBookshelfBackground,
+            )
+            Spacer(Modifier.height(12.dp))
+            BackgroundPreferenceCard(
+                title = stringResourceCompat(R.string.reader_background),
+                summary = stringResourceCompat(
+                    when (preferences.readerBackgroundMode) {
+                        ReaderBackgroundMode.FOLLOW_THEME -> R.string.background_default
+                        ReaderBackgroundMode.COLOR -> R.string.background_solid
+                        ReaderBackgroundMode.IMAGE -> R.string.background_custom
+                    },
+                ),
+                imagePath = preferences.readerBackgroundPath,
+                liquidGlassEnabled = glassEnabled,
+                backdrop = backdrop,
+                onClick = onImportReaderBackground,
+                onClear = onClearReaderBackground,
+            )
+            Spacer(Modifier.height(32.dp))
+        }
+    }
+}
+
+@Composable
+private fun BackgroundPreferenceCard(
+    title: String,
+    summary: String,
+    imagePath: String?,
+    liquidGlassEnabled: Boolean,
+    backdrop: LayerBackdrop,
+    onClick: () -> Unit,
+    onClear: () -> Unit,
+) {
+    val glassColor = glassSurfaceColor()
+    val glassModifier = if (liquidGlassEnabled) {
+        Modifier.drawBackdrop(
+            backdrop = backdrop,
+            shape = { RoundedCornerShape(8.dp) },
+            effects = { blur(12.dp.toPx()) },
+            onDrawSurface = { drawRect(glassColor) },
+        )
+    } else {
+        Modifier
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).then(glassModifier),
+        colors = settingsCardColors(liquidGlassEnabled),
+        cornerRadius = 8.dp,
+        pressFeedbackType = PressFeedbackType.Sink,
+        onClick = onClick,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            if (imagePath == null) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 76.dp, height = 54.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MiuixTheme.colorScheme.surfaceContainerHigh),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(MiuixIcons.Image, contentDescription = null)
+                }
+            } else {
+                AsyncImage(
+                    model = imagePath,
+                    contentDescription = null,
+                    modifier = Modifier.size(width = 76.dp, height = 54.dp).clip(RoundedCornerShape(8.dp)),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, style = MiuixTheme.textStyles.body1.copy(fontWeight = FontWeight.Medium))
+                Text(summary, style = MiuixTheme.textStyles.body2)
+            }
+            if (imagePath != null) {
+                IconButton(onClick = onClear) {
+                    Icon(MiuixIcons.Delete, contentDescription = stringResourceCompat(R.string.restore_default))
+                }
             }
         }
     }
 }
 
 @Composable
-private fun stringResourceCompat(id: Int, vararg args: Any): String =
+private fun settingsCardColors(glassEnabled: Boolean) =
+    if (glassEnabled) CardDefaults.defaultColors(color = Color.Transparent)
+    else CardDefaults.defaultColors()
+
+@Composable
+private fun topBarColor(glassEnabled: Boolean): Color =
+    if (glassEnabled) Color.Transparent else MiuixTheme.colorScheme.surface.copy(alpha = 0.96f)
+
+@Composable
+private fun glassSurfaceColor(): Color =
+    Color.White.copy(alpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.10f else 0.48f)
+
+@Composable
+internal fun stringResourceCompat(id: Int, vararg args: Any): String =
     androidx.compose.ui.res.stringResource(id, *args)
 
 @Composable

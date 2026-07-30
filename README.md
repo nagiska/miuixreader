@@ -11,7 +11,11 @@ A local-first Android reader with a Xiaomi HyperOS-inspired interface.
 - Multi-select import through the Android Storage Access Framework
 - Persistent local library with duplicate detection and reading progress
 - EPUB/CBZ cover extraction and EPUB metadata parsing
-- Optional AndroidLiquidGlass surfaces on the bookshelf
+- Tap-to-reveal animated reader controls with progress indicators
+- Shared EPUB/TXT typography controls for font, size, and weight
+- Independent bookshelf and reader image backgrounds with automatic dimming
+- System, light, and dark appearance modes
+- Optional AndroidLiquidGlass surfaces on the bookshelf and reader
 
 Android 13 or newer is required.
 

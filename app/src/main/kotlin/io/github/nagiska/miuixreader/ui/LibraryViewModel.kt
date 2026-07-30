@@ -6,9 +6,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import io.github.nagiska.miuixreader.ReaderApplication
 import io.github.nagiska.miuixreader.R
+import io.github.nagiska.miuixreader.data.AppThemeMode
+import io.github.nagiska.miuixreader.data.BackgroundTarget
 import io.github.nagiska.miuixreader.data.BookEntity
 import io.github.nagiska.miuixreader.data.BookRepository
 import io.github.nagiska.miuixreader.data.ImportOutcome
+import io.github.nagiska.miuixreader.data.ReaderPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -19,7 +22,7 @@ import kotlinx.coroutines.launch
 data class LibraryUiState(
     val books: List<BookEntity> = emptyList(),
     val query: String = "",
-    val liquidGlassEnabled: Boolean = false,
+    val preferences: ReaderPreferences = ReaderPreferences(),
     val isImporting: Boolean = false,
     val message: String? = null,
 )
@@ -35,10 +38,10 @@ class LibraryViewModel(
     val state: StateFlow<LibraryUiState> = combine(
         repository.observeBooks(),
         query,
-        application.settings.liquidGlassEnabled,
+        application.settings.preferences,
         isImporting,
         message,
-    ) { books, search, glass, importing, status ->
+    ) { books, search, preferences, importing, status ->
         val normalized = search.trim()
         LibraryUiState(
             books = books.filter { book ->
@@ -46,7 +49,7 @@ class LibraryViewModel(
                     book.author.contains(normalized, ignoreCase = true)
             },
             query = search,
-            liquidGlassEnabled = glass,
+            preferences = preferences,
             isImporting = importing,
             message = status,
         )
@@ -89,6 +92,25 @@ class LibraryViewModel(
 
     fun setLiquidGlassEnabled(enabled: Boolean) {
         viewModelScope.launch { getApplication<ReaderApplication>().settings.setLiquidGlassEnabled(enabled) }
+    }
+
+    fun setThemeMode(mode: AppThemeMode) {
+        viewModelScope.launch { getApplication<ReaderApplication>().settings.setThemeMode(mode) }
+    }
+
+    fun importBackground(target: BackgroundTarget, uri: Uri) {
+        viewModelScope.launch {
+            val imported = getApplication<ReaderApplication>().settings.importBackground(target, uri)
+            message.value = getApplication<ReaderApplication>().getString(
+                if (imported) R.string.background_imported else R.string.background_import_failed,
+            )
+        }
+    }
+
+    fun clearBackground(target: BackgroundTarget) {
+        viewModelScope.launch {
+            getApplication<ReaderApplication>().settings.clearBackground(target)
+        }
     }
 
     fun clearMessage() {
