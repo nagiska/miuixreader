@@ -954,7 +954,7 @@ private fun TextReaderScreen(
                         )
                         val up = waitForUpOrCancellation(pass = PointerEventPass.Final)
                         if (up == null) return@awaitEachGesture
-                        val activationHeight = size.height * CHROME_TAP_REGION
+                        val activationHeight = size.height * TEXT_CHROME_TAP_REGION
                         if (!chrome.visible && (
                                 down.position.y <= activationHeight ||
                                     down.position.y >= size.height - activationHeight
@@ -1082,6 +1082,8 @@ private fun textProgression(
         charactersBefore + charactersInItem * offsetFraction.coerceIn(0f, 1f)
         ) / totalCharacterCount.coerceAtLeast(1).toFloat()
 }
+
+private const val TEXT_CHROME_TAP_REGION = 0.24f
 
 private enum class PublicationReader { EPUB, PDF, IMAGE }
 

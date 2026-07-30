@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -341,7 +340,7 @@ private fun ReaderBottomBar(
                             liquidGlassEnabled,
                             backdrop,
                             glassColor,
-                            RoundedCornerShape(ReaderCardCornerRadius),
+                            RoundedCornerShape(8.dp),
                         ),
                     ),
                 colors = if (liquidGlassEnabled) {
@@ -349,7 +348,7 @@ private fun ReaderBottomBar(
                 } else {
                     CardDefaults.defaultColors()
                 },
-                cornerRadius = ReaderCardCornerRadius,
+                cornerRadius = 8.dp,
             ) {
                 Text(
                     text = label,
@@ -548,7 +547,7 @@ private fun ReaderBackgroundSheet(
                             selected = imageSelected
                         },
                     colors = CardDefaults.defaultColors(color = Color.Transparent),
-                    cornerRadius = ReaderCardCornerRadius,
+                    cornerRadius = 8.dp,
                     pressFeedbackType = PressFeedbackType.Sink,
                     holdDownState = imageSelected,
                     onClick = onUseImage,
@@ -593,7 +592,7 @@ private fun BackgroundSwatch(
                 this.selected = selected
             },
         colors = CardDefaults.defaultColors(color = color),
-        cornerRadius = ReaderCardCornerRadius,
+        cornerRadius = 8.dp,
         pressFeedbackType = PressFeedbackType.Sink,
         holdDownState = selected,
         onClick = onClick,
