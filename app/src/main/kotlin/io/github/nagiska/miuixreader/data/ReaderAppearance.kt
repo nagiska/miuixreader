@@ -22,7 +22,9 @@ data class ReaderPreferences(
     val fontWeight: Int = 400,
 )
 
-const val DEFAULT_IMAGE_SCRIM = 0.58f
+const val DEFAULT_IMAGE_SCRIM = 0.45f
+const val MIN_IMAGE_SCRIM = 0.28f
+const val MAX_IMAGE_SCRIM = 0.55f
 const val MIN_FONT_SCALE = 0.75f
 const val MAX_FONT_SCALE = 2f
 const val DEFAULT_READER_BACKGROUND: Int = -461330
@@ -36,11 +38,12 @@ fun contrastTextColor(background: Int): Int {
 
 internal fun recommendedScrimAlpha(maxLuminance: Double): Float {
     if (maxLuminance <= 0.0) return DEFAULT_IMAGE_SCRIM
-    val targetLuminance = 1.05 / 4.5 - 0.05
-    return (1.0 - targetLuminance / maxLuminance)
+    return (1.0 - TARGET_IMAGE_LUMINANCE / maxLuminance)
         .toFloat()
-        .coerceIn(DEFAULT_IMAGE_SCRIM, 0.82f)
+        .coerceIn(MIN_IMAGE_SCRIM, MAX_IMAGE_SCRIM)
 }
+
+private const val TARGET_IMAGE_LUMINANCE = 0.38
 
 internal fun relativeLuminance(color: Int): Double {
     fun channel(value: Int): Double {

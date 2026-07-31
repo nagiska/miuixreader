@@ -16,17 +16,17 @@ class ReaderAppearanceTest {
     }
 
     @Test
-    fun brightImageReceivesReadableScrim() {
+    fun brightImageReceivesModerateScrim() {
         val alpha = recommendedScrimAlpha(1.0)
         val resultingLuminance = 1.0 * (1.0 - alpha)
-        val whiteContrast = 1.05 / (resultingLuminance + 0.05)
 
-        assertTrue(alpha in DEFAULT_IMAGE_SCRIM..0.82f)
-        assertTrue(whiteContrast >= 4.45)
+        assertTrue(alpha in MIN_IMAGE_SCRIM..MAX_IMAGE_SCRIM)
+        assertTrue(alpha < 0.6f)
+        assertTrue(resultingLuminance >= 0.38)
     }
 
     @Test
     fun darkImageKeepsMinimumScrim() {
-        assertEquals(DEFAULT_IMAGE_SCRIM, recommendedScrimAlpha(0.05))
+        assertEquals(MIN_IMAGE_SCRIM, recommendedScrimAlpha(0.05))
     }
 }

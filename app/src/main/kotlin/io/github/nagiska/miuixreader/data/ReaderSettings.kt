@@ -54,7 +54,7 @@ class ReaderSettings(private val context: Context) {
                     liquidGlassEnabled = values[glassKey] ?: false,
                     bookshelfBackgroundPath = values[bookshelfBackgroundPathKey].existingFilePath(),
                     bookshelfBackgroundScrim = values[bookshelfBackgroundScrimKey]
-                        ?.coerceIn(DEFAULT_IMAGE_SCRIM, 0.82f)
+                        ?.coerceIn(MIN_IMAGE_SCRIM, MAX_IMAGE_SCRIM)
                         ?: DEFAULT_IMAGE_SCRIM,
                     readerBackgroundMode = if (
                         readerBackgroundMode == ReaderBackgroundMode.IMAGE && readerBackgroundPath == null
@@ -67,7 +67,7 @@ class ReaderSettings(private val context: Context) {
                         ?: DEFAULT_READER_BACKGROUND,
                     readerBackgroundPath = readerBackgroundPath,
                     readerBackgroundScrim = values[readerBackgroundScrimKey]
-                        ?.coerceIn(DEFAULT_IMAGE_SCRIM, 0.82f)
+                        ?.coerceIn(MIN_IMAGE_SCRIM, MAX_IMAGE_SCRIM)
                         ?: DEFAULT_IMAGE_SCRIM,
                     fontFamily = values[fontFamilyKey].enumValueOrDefault(ReaderFontFamily.ORIGINAL),
                     fontScale = values[fontScaleKey]?.coerceIn(MIN_FONT_SCALE, MAX_FONT_SCALE) ?: 1f,

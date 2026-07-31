@@ -34,7 +34,7 @@ internal fun buildEpubPageStyleScript(
             val alpha = preferences.readerBackgroundScrim.coerceIn(0f, 0.9f)
             "background-image:url('$uri')!important;background-color:rgba(0,0,0,$alpha)!important;" +
                 "background-blend-mode:multiply!important;background-size:cover!important;" +
-                "background-position:center!important;background-attachment:fixed!important;"
+                "background-position:center!important;"
         }
         .orEmpty()
     val css = buildString {
