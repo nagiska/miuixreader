@@ -1,6 +1,7 @@
 package io.github.nagiska.miuixreader.ui
 
 import androidx.activity.compose.BackHandler
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,13 +34,17 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import com.kyant.backdrop.drawBackdrop
+import com.kyant.backdrop.effects.blur
 import io.github.nagiska.miuixreader.R
 import io.github.nagiska.miuixreader.data.AppThemeMode
 import io.github.nagiska.miuixreader.data.BackgroundTarget
@@ -49,9 +54,12 @@ import io.github.nagiska.miuixreader.data.ReaderPreferences
 import io.github.nagiska.miuixreader.data.bookFormat
 import io.github.nagiska.miuixreader.ui.theme.ReaderTheme
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -84,6 +92,28 @@ fun ReaderApp(
     var settingsVisible by rememberSaveable { mutableStateOf(false) }
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<BookEntity?>(null) }
+    val backdrop = remember { WallpaperBackdrop() }
+    val windowSize = LocalWindowInfo.current.containerSize
+    LaunchedEffect(state.preferences.bookshelfBackgroundPath, windowSize) {
+        val bitmap = withContext(Dispatchers.IO) {
+            state.preferences.bookshelfBackgroundPath?.let { path ->
+                runCatching {
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeFile(path, bounds)
+                    var sample = 1
+                    while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 1280) sample *= 2
+                    BitmapFactory.decodeFile(
+                        path,
+                        BitmapFactory.Options().apply {
+                            inSampleSize = sample
+                            inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888
+                        },
+                    )
+                }.getOrNull()
+            }
+        }
+        backdrop.setWallpaper(bitmap, windowSize.width, windowSize.height)
+    }
 
     LaunchedEffect(state.message) {
         if (state.message != null) {
@@ -107,6 +137,7 @@ fun ReaderApp(
                 if (settingsVisible) {
                     SettingsScreen(
                         preferences = state.preferences,
+                        backdrop = backdrop,
                         onLiquidGlassChange = viewModel::setLiquidGlassEnabled,
                         onThemeModeChange = viewModel::setThemeMode,
                         onImportBookshelfBackground = onImportBookshelfBackground,
@@ -122,6 +153,8 @@ fun ReaderApp(
                 } else {
                     BookshelfScreen(
                         state = state,
+                        liquidGlassEnabled = state.preferences.liquidGlassEnabled,
+                        backdrop = backdrop,
                         searchVisible = searchVisible,
                         onSearchVisibleChange = { searchVisible = it },
                         onQueryChange = viewModel::setQuery,
@@ -189,6 +222,8 @@ private fun HomeBackground(
 @Composable
 private fun BookshelfScreen(
     state: LibraryUiState,
+    liquidGlassEnabled: Boolean,
+    backdrop: WallpaperBackdrop,
     searchVisible: Boolean,
     onSearchVisibleChange: (Boolean) -> Unit,
     onQueryChange: (String) -> Unit,
@@ -198,15 +233,26 @@ private fun BookshelfScreen(
     onSettings: () -> Unit,
 ) {
     val hasBackgroundImage = state.preferences.bookshelfBackgroundPath != null
+    val glassEnabled = liquidGlassEnabled && hasBackgroundImage
+    val tintColor = glassTintColor()
     Scaffold(
         containerColor = Color.Transparent,
         topBar = {
             Column(
-                modifier = Modifier.background(MiuixTheme.colorScheme.surface.copy(alpha = 0.96f)),
+                modifier = if (glassEnabled) {
+                    Modifier.drawBackdrop(
+                        backdrop = backdrop,
+                        shape = { RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp) },
+                        effects = { blur(18.dp.toPx()) },
+                        onDrawSurface = { drawRect(tintColor) },
+                    )
+                } else {
+                    Modifier.background(MiuixTheme.colorScheme.surface.copy(alpha = 0.96f))
+                },
             ) {
                 TopAppBar(
                     title = stringResourceCompat(R.string.bookshelf_title),
-                    color = MiuixTheme.colorScheme.surface.copy(alpha = 0.96f),
+                    color = if (glassEnabled) Color.Transparent else MiuixTheme.colorScheme.surface.copy(alpha = 0.96f),
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
@@ -277,6 +323,8 @@ private fun BookshelfScreen(
                     items(state.books, key = { it.id }) { book ->
                         BookRow(
                             book = book,
+                            glassEnabled = glassEnabled,
+                            backdrop = backdrop,
                             onClick = { onOpen(book) },
                             onDelete = { onDelete(book) },
                         )
@@ -330,12 +378,32 @@ private fun EmptyShelf(
 @Composable
 private fun BookRow(
     book: BookEntity,
+    glassEnabled: Boolean,
+    backdrop: WallpaperBackdrop,
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val tintColor = glassTintColor()
     Card(
         modifier = Modifier
-            .fillMaxWidth(),
+            .fillMaxWidth()
+            .then(
+                if (glassEnabled) {
+                    Modifier.drawBackdrop(
+                        backdrop = backdrop,
+                        shape = { RoundedCornerShape(8.dp) },
+                        effects = { blur(14.dp.toPx()) },
+                        onDrawSurface = { drawRect(tintColor) },
+                    )
+                } else {
+                    Modifier
+                },
+            ),
+        colors = if (glassEnabled) {
+            CardDefaults.defaultColors(color = Color.Transparent)
+        } else {
+            CardDefaults.defaultColors()
+        },
         cornerRadius = 8.dp,
         pressFeedbackType = PressFeedbackType.Sink,
         onClick = onClick,
@@ -433,6 +501,7 @@ private fun SearchField(
 @Composable
 private fun SettingsScreen(
     preferences: ReaderPreferences,
+    backdrop: WallpaperBackdrop,
     onLiquidGlassChange: (Boolean) -> Unit,
     onThemeModeChange: (AppThemeMode) -> Unit,
     onImportBookshelfBackground: () -> Unit,
@@ -443,6 +512,7 @@ private fun SettingsScreen(
 ) {
     val glassEnabled = preferences.liquidGlassEnabled
     val hasBackgroundImage = preferences.bookshelfBackgroundPath != null
+    val tintColor = glassTintColor()
     Scaffold(
         containerColor = if (hasBackgroundImage) {
             MiuixTheme.colorScheme.background.copy(alpha = 0.76f)
@@ -452,8 +522,21 @@ private fun SettingsScreen(
         topBar = {
             TopAppBar(
                 title = stringResourceCompat(R.string.settings),
-                modifier = Modifier.background(MiuixTheme.colorScheme.surface.copy(alpha = 0.96f)),
-                color = MiuixTheme.colorScheme.surface.copy(alpha = 0.96f),
+                modifier = if (glassEnabled && hasBackgroundImage) {
+                    Modifier.drawBackdrop(
+                        backdrop = backdrop,
+                        shape = { RoundedCornerShape(bottomStart = 16.dp, bottomEnd = 16.dp) },
+                        effects = { blur(18.dp.toPx()) },
+                        onDrawSurface = { drawRect(tintColor) },
+                    )
+                } else {
+                    Modifier.background(MiuixTheme.colorScheme.surface.copy(alpha = 0.96f))
+                },
+                color = if (glassEnabled && hasBackgroundImage) {
+                    Color.Transparent
+                } else {
+                    MiuixTheme.colorScheme.surface.copy(alpha = 0.96f)
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(MiuixIcons.Back, contentDescription = stringResourceCompat(R.string.back))
@@ -469,7 +552,24 @@ private fun SettingsScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
+                    .padding(horizontal = 12.dp)
+                    .then(
+                        if (glassEnabled && hasBackgroundImage) {
+                            Modifier.drawBackdrop(
+                                backdrop = backdrop,
+                                shape = { RoundedCornerShape(8.dp) },
+                                effects = { blur(14.dp.toPx()) },
+                                onDrawSurface = { drawRect(tintColor) },
+                            )
+                        } else {
+                            Modifier
+                        },
+                    ),
+                colors = if (glassEnabled && hasBackgroundImage) {
+                    CardDefaults.defaultColors(color = Color.Transparent)
+                } else {
+                    CardDefaults.defaultColors()
+                },
                 cornerRadius = 8.dp,
             ) {
                 Text(
@@ -507,6 +607,8 @@ private fun SettingsScreen(
                     },
                 ),
                 imagePath = preferences.bookshelfBackgroundPath,
+                glassEnabled = glassEnabled && hasBackgroundImage,
+                backdrop = backdrop,
                 onClick = onImportBookshelfBackground,
                 onClear = onClearBookshelfBackground,
             )
@@ -521,6 +623,8 @@ private fun SettingsScreen(
                     },
                 ),
                 imagePath = preferences.readerBackgroundPath,
+                glassEnabled = glassEnabled && hasBackgroundImage,
+                backdrop = backdrop,
                 onClick = onImportReaderBackground,
                 onClear = onClearReaderBackground,
             )
@@ -534,11 +638,33 @@ private fun BackgroundPreferenceCard(
     title: String,
     summary: String,
     imagePath: String?,
+    glassEnabled: Boolean,
+    backdrop: WallpaperBackdrop,
     onClick: () -> Unit,
     onClear: () -> Unit,
 ) {
+    val tintColor = glassTintColor()
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
+            .then(
+                if (glassEnabled) {
+                    Modifier.drawBackdrop(
+                        backdrop = backdrop,
+                        shape = { RoundedCornerShape(8.dp) },
+                        effects = { blur(14.dp.toPx()) },
+                        onDrawSurface = { drawRect(tintColor) },
+                    )
+                } else {
+                    Modifier
+                },
+            ),
+        colors = if (glassEnabled) {
+            CardDefaults.defaultColors(color = Color.Transparent)
+        } else {
+            CardDefaults.defaultColors()
+        },
         cornerRadius = 8.dp,
         pressFeedbackType = PressFeedbackType.Sink,
         onClick = onClick,
@@ -582,6 +708,10 @@ private fun BackgroundPreferenceCard(
 @Composable
 internal fun stringResourceCompat(id: Int, vararg args: Any): String =
     androidx.compose.ui.res.stringResource(id, *args)
+
+@Composable
+private fun glassTintColor(): Color =
+    Color.White.copy(alpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.06f else 0.16f)
 
 @Composable
 private fun pluralResourceCompat(id: Int, count: Int): String =

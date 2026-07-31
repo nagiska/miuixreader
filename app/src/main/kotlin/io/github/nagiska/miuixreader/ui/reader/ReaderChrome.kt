@@ -635,7 +635,7 @@ private fun readerGlassModifier(
 
 @Composable
 private fun readerGlassColor(): Color =
-    Color.White.copy(alpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.10f else 0.36f)
+    Color.White.copy(alpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.07f else 0.20f)
 
 private const val CHROME_EXIT_MILLIS = 450L
 private const val CHROME_TAP_REGION = 0.24f

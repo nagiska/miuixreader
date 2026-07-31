@@ -19,7 +19,7 @@
     <string name="back">Back</string>
     <string name="appearance">Appearance</string>
     <string name="liquid_glass">Liquid glass</string>
-    <string name="liquid_glass_summary">Use Backdrop glass surfaces in the reader</string>
+    <string name="liquid_glass_summary">Use Backdrop glass surfaces on the bookshelf and reader</string>
     <string name="theme_mode">Theme</string>
     <string name="theme_system">System</string>
     <string name="theme_light">Light</string>

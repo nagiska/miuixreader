@@ -18,7 +18,7 @@
     <string name="back">返回</string>
     <string name="appearance">外观</string>
     <string name="liquid_glass">液态玻璃</string>
-    <string name="liquid_glass_summary">在阅读器表面使用 Backdrop 玻璃效果</string>
+    <string name="liquid_glass_summary">在书架和阅读器表面使用 Backdrop 玻璃效果</string>
     <string name="theme_mode">主题模式</string>
     <string name="theme_system">跟随系统</string>
     <string name="theme_light">浅色</string>
