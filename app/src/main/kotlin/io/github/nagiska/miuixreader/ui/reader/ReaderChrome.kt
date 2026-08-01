@@ -12,6 +12,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -40,18 +42,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.kyant.backdrop.Backdrop
@@ -82,7 +85,6 @@ import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Background
 import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.icon.extended.Image
-import top.yukonga.miuix.kmp.overlay.OverlayBottomSheet
 import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
@@ -403,6 +405,104 @@ private fun ReaderBottomBar(
 }
 
 @Composable
+private fun ReaderGlassSheet(
+    show: Boolean,
+    title: String,
+    liquidGlassEnabled: Boolean,
+    backdrop: Backdrop,
+    onDismiss: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    var offsetY by remember { mutableStateOf(0f) }
+    val density = LocalDensity.current
+    val dismissThreshold = with(density) { 120.dp.toPx() }
+    val glassColor = readerGlassColor()
+    val sheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+
+    LaunchedEffect(show) {
+        if (show) offsetY = 0f
+    }
+
+    AnimatedVisibility(
+        visible = show,
+        modifier = Modifier.fillMaxSize(),
+        enter = readerEnter { it } + fadeIn(animationSpec = folmeSpring(0.9f, 0.38f)),
+        exit = readerExit { it } + fadeOut(animationSpec = folmeSpring(0.9f, 0.38f)),
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+                    .graphicsLayer { translationY = offsetY },
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (liquidGlassEnabled) {
+                                readerGlassModifier(
+                                    preferencesEnabled = true,
+                                    backdrop = backdrop,
+                                    color = glassColor,
+                                    shape = sheetShape,
+                                )
+                            } else {
+                                Modifier.clip(sheetShape).background(MiuixTheme.colorScheme.background)
+                            },
+                        )
+                        .navigationBarsPadding()
+                        .padding(horizontal = 16.dp, bottom = 16.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(28.dp)
+                            .pointerInput(show) {
+                                detectVerticalDragGestures(
+                                    onVerticalDrag = { change, dragAmount ->
+                                        change.consume()
+                                        offsetY = (offsetY + dragAmount).coerceAtLeast(0f)
+                                    },
+                                    onDragEnd = {
+                                        if (offsetY > dismissThreshold) {
+                                            onDismiss()
+                                        } else {
+                                            offsetY = 0f
+                                        }
+                                    },
+                                    onDragCancel = {
+                                        offsetY = 0f
+                                    },
+                                )
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .width(45.dp)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.28f)),
+                        )
+                    }
+                    Text(
+                        text = title,
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        style = MiuixTheme.textStyles.body1.copy(fontWeight = FontWeight.Medium),
+                        textAlign = TextAlign.Center,
+                    )
+                    content()
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ReaderTypographySheet(
     show: Boolean,
     preferences: ReaderPreferences,
@@ -413,21 +513,12 @@ private fun ReaderTypographySheet(
     onFontWeightChange: (Int) -> Unit,
 ) {
     var fontScale by remember(preferences.fontScale) { mutableStateOf(preferences.fontScale) }
-    val glassColor = readerGlassColor()
-    OverlayBottomSheet(
+    ReaderGlassSheet(
         show = show,
         title = stringResourceCompat(R.string.typography),
-        onDismissRequest = onDismiss,
-        enableWindowDim = false,
-        backgroundColor = if (preferences.liquidGlassEnabled) Color.Transparent else MiuixTheme.colorScheme.background,
-        outsideMargin = DpSize(12.dp, 0.dp),
-        insideMargin = DpSize(16.dp, 0.dp),
-        modifier = readerGlassModifier(
-            preferences.liquidGlassEnabled,
-            backdrop,
-            glassColor,
-            RoundedCornerShape(28.dp),
-        ),
+        liquidGlassEnabled = preferences.liquidGlassEnabled,
+        backdrop = backdrop,
+        onDismiss = onDismiss,
     ) {
         Column(
             modifier = Modifier
@@ -493,21 +584,12 @@ private fun ReaderBackgroundSheet(
         mutableStateOf(Color(preferences.readerBackgroundColor))
     }
     var customPaletteVisible by remember { mutableStateOf(false) }
-    val glassColor = readerGlassColor()
-    OverlayBottomSheet(
+    ReaderGlassSheet(
         show = show,
         title = stringResourceCompat(R.string.reader_background),
-        onDismissRequest = onDismiss,
-        enableWindowDim = false,
-        backgroundColor = if (preferences.liquidGlassEnabled) Color.Transparent else MiuixTheme.colorScheme.background,
-        outsideMargin = DpSize(12.dp, 0.dp),
-        insideMargin = DpSize(16.dp, 0.dp),
-        modifier = readerGlassModifier(
-            preferences.liquidGlassEnabled,
-            backdrop,
-            glassColor,
-            RoundedCornerShape(28.dp),
-        ),
+        liquidGlassEnabled = preferences.liquidGlassEnabled,
+        backdrop = backdrop,
+        onDismiss = onDismiss,
     ) {
         Column(
             modifier = Modifier
