@@ -52,7 +52,9 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -185,6 +187,8 @@ fun ReaderChrome(
     BackHandler(
         enabled = autoHideEnabled && chrome.visible && chrome.panel == ReaderPanel.NONE,
     ) { chrome.hide() }
+    var topBarBottom by remember { mutableStateOf(0f) }
+    var bottomBarTop by remember { mutableStateOf(Float.MAX_VALUE) }
     val dismissModifier = if (
         autoHideEnabled && chrome.visible && chrome.panel == ReaderPanel.NONE
     ) {
@@ -196,10 +200,9 @@ fun ReaderChrome(
                 )
                 val up = waitForUpOrCancellation(pass = PointerEventPass.Final)
                 if (up == null) return@awaitEachGesture
-                val controlRegion = size.height * CHROME_TAP_REGION
                 if (
-                    down.position.y > controlRegion &&
-                    down.position.y < size.height - controlRegion
+                    down.position.y > topBarBottom &&
+                    down.position.y < bottomBarTop
                 ) {
                     chrome.hide()
                 }
@@ -227,12 +230,18 @@ fun ReaderChrome(
                 onBack = onBack,
                 onTypography = { chrome.open(ReaderPanel.TYPOGRAPHY) },
                 onBackground = { chrome.open(ReaderPanel.BACKGROUND) },
+                modifier = Modifier.onGloballyPositioned {
+                    topBarBottom = it.positionInWindow().y + it.size.height.toFloat()
+                },
             )
             ReaderBottomBar(
                 visible = chrome.visible,
                 label = progress.value,
                 backdrop = backdrop,
                 liquidGlassEnabled = preferences.liquidGlassEnabled,
+                modifier = Modifier.onGloballyPositioned {
+                    bottomBarTop = it.positionInWindow().y
+                },
             )
         }
         ReaderTypographySheet(
@@ -270,6 +279,7 @@ private fun ReaderTopBar(
     onBack: () -> Unit,
     onTypography: () -> Unit,
     onBackground: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val glassColor = readerGlassColor()
     val typographyDescription = stringResourceCompat(R.string.typography)
@@ -279,7 +289,7 @@ private fun ReaderTopBar(
         exit = readerExit { -it } + fadeOut(animationSpec = folmeSpring(0.9f, 0.38f)),
     ) {
         Box(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxWidth()
                 .then(readerGlassModifier(preferences.liquidGlassEnabled, backdrop, glassColor, topShape()))
                 .then(
@@ -374,6 +384,7 @@ private fun ReaderBottomBar(
     label: String,
     backdrop: Backdrop,
     liquidGlassEnabled: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     val glassColor = readerGlassColor()
     AnimatedVisibility(
@@ -390,7 +401,7 @@ private fun ReaderBottomBar(
             contentAlignment = Alignment.BottomCenter,
         ) {
             Card(
-                modifier = Modifier
+                modifier = modifier
                     .fillMaxWidth()
                     .then(
                         readerGlassModifier(
@@ -448,21 +459,6 @@ private fun ReaderGlassSheet(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .then(
-                    if (liquidGlassEnabled) {
-                        Modifier.drawBackdrop(
-                            backdrop = backdrop,
-                            shape = { RoundedCornerShape(0.dp) },
-                            effects = {
-                                vibrancy()
-                                blur(20.dp.toPx())
-                            },
-                            onDrawSurface = { drawRect(glassColor) },
-                        )
-                    } else {
-                        Modifier
-                    },
-                )
                 .pointerInput(show) {
                     awaitEachGesture {
                         val down = awaitFirstDown(
@@ -471,9 +467,8 @@ private fun ReaderGlassSheet(
                         )
                         val up = waitForUpOrCancellation(pass = PointerEventPass.Final)
                         if (up == null) return@awaitEachGesture
-                        val controlRegion = size.height * CHROME_TAP_REGION
                         val aboveSheet = down.position.y < size.height - sheetHeight
-                        if (down.position.y > controlRegion && aboveSheet) {
+                        if (aboveSheet) {
                             onDismiss()
                         }
                     }
@@ -814,4 +809,3 @@ private fun readerGlassColor(): Color =
     Color.White.copy(alpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.08f else 0.18f)
 
 private const val CHROME_EXIT_MILLIS = 450L
-private const val CHROME_TAP_REGION = 0.24f

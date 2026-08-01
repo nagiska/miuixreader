@@ -421,9 +421,10 @@ class ReaderActivity : FragmentActivity() {
                 override fun onTap(event: TapEvent): Boolean {
                     val height = visualNavigator.publicationView.height.toFloat()
                     if (height <= 0f) return false
-                    val activationHeight = height * CHROME_TAP_REGION
-                    val isActivationTap = event.point.y <= activationHeight ||
-                        event.point.y >= height - activationHeight
+                    val activationTop = height * CHROME_TAP_REGION_TOP
+                    val activationBottom = height * CHROME_TAP_REGION_BOTTOM
+                    val isActivationTap = event.point.y <= activationTop ||
+                        event.point.y >= height - activationBottom
                     if (!isActivationTap) return false
                     showPublicationChrome()
                     return true
@@ -841,7 +842,8 @@ class ReaderActivity : FragmentActivity() {
         private const val MAX_TEXT_BYTES = 32L * 1024L * 1024L
         private const val TXT_PROGRESSION_PREFIX = "txt:"
         private const val TXT_PROGRESSION_V2_PREFIX = "txt2:"
-        private const val CHROME_TAP_REGION = 0.24f
+        private const val CHROME_TAP_REGION_TOP = 0.10f
+        private const val CHROME_TAP_REGION_BOTTOM = 0.24f
         private const val MAX_CAPTURE_DIMENSION = 1280
         private const val BACKDROP_REFRESH_MIN_INTERVAL_MILLIS = 400L
         private const val BACKDROP_REFRESH_CAPTURE_DELAY_MILLIS = 32L
@@ -1008,10 +1010,11 @@ private fun TextReaderScreen(
                         )
                         val up = waitForUpOrCancellation(pass = PointerEventPass.Final)
                         if (up == null) return@awaitEachGesture
-                        val activationHeight = size.height * TEXT_CHROME_TAP_REGION
+                        val activationTop = size.height * TEXT_CHROME_TAP_REGION_TOP
+                        val activationBottom = size.height * TEXT_CHROME_TAP_REGION_BOTTOM
                         if (!chrome.visible && (
-                                down.position.y <= activationHeight ||
-                                    down.position.y >= size.height - activationHeight
+                                down.position.y <= activationTop ||
+                                    down.position.y >= size.height - activationBottom
                                 )
                         ) {
                             chrome.show()
@@ -1137,7 +1140,8 @@ private fun textProgression(
         ) / totalCharacterCount.coerceAtLeast(1).toFloat()
 }
 
-private const val TEXT_CHROME_TAP_REGION = 0.24f
+private const val TEXT_CHROME_TAP_REGION_TOP = 0.10f
+private const val TEXT_CHROME_TAP_REGION_BOTTOM = 0.24f
 
 private enum class PublicationReader { EPUB, PDF, IMAGE }
 
