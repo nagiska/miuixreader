@@ -279,35 +279,75 @@ private fun ReaderTopBar(
                 title = title,
                 color = if (preferences.liquidGlassEnabled) Color.Transparent else MiuixTheme.colorScheme.surface.copy(alpha = 0.96f),
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(MiuixIcons.Back, contentDescription = stringResourceCompat(R.string.back))
+                    GlassCircleButton(
+                        enabled = preferences.liquidGlassEnabled,
+                        backdrop = backdrop,
+                    ) {
+                        IconButton(onClick = onBack) {
+                            Icon(MiuixIcons.Back, contentDescription = stringResourceCompat(R.string.back))
+                        }
                     }
                 },
                 actions = {
                     if (supportsTypography) {
-                        IconButton(onClick = onTypography) {
-                            Text(
-                                text = "Aa",
-                                modifier = Modifier.semantics {
-                                    contentDescription = typographyDescription
-                                },
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MiuixTheme.colorScheme.onSurface,
-                            )
+                        GlassCircleButton(
+                            enabled = preferences.liquidGlassEnabled,
+                            backdrop = backdrop,
+                        ) {
+                            IconButton(onClick = onTypography) {
+                                Text(
+                                    text = "Aa",
+                                    modifier = Modifier.semantics {
+                                        contentDescription = typographyDescription
+                                    },
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MiuixTheme.colorScheme.onSurface,
+                                )
+                            }
                         }
                     }
                     if (supportsTypography) {
-                        IconButton(onClick = onBackground) {
-                            Icon(
-                                MiuixIcons.Background,
-                                contentDescription = stringResourceCompat(R.string.reader_background),
-                            )
+                        GlassCircleButton(
+                            enabled = preferences.liquidGlassEnabled,
+                            backdrop = backdrop,
+                        ) {
+                            IconButton(onClick = onBackground) {
+                                Icon(
+                                    MiuixIcons.Background,
+                                    contentDescription = stringResourceCompat(R.string.reader_background),
+                                )
+                            }
                         }
                     }
                 },
             )
         }
+    }
+}
+
+@Composable
+private fun GlassCircleButton(
+    enabled: Boolean,
+    backdrop: Backdrop,
+    content: @Composable () -> Unit,
+) {
+    if (enabled) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .drawBackdrop(
+                    backdrop = backdrop,
+                    shape = { RoundedCornerShape(50) },
+                    effects = { blur(14.dp.toPx()) },
+                    onDrawSurface = { drawRect(readerGlassColor()) },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            content()
+        }
+    } else {
+        content()
     }
 }
 
