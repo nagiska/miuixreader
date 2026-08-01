@@ -1,7 +1,13 @@
 package io.github.nagiska.miuixreader.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.Interaction
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,7 +41,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -50,6 +55,8 @@ import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.vibrancy
 import io.github.nagiska.miuixreader.R
 import io.github.nagiska.miuixreader.data.AppThemeMode
 import io.github.nagiska.miuixreader.data.BackgroundTarget
@@ -61,6 +68,8 @@ import io.github.nagiska.miuixreader.data.bookFormat
 import io.github.nagiska.miuixreader.ui.theme.ReaderTheme
 import java.util.Locale
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.compose.ui.util.lerp
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
@@ -226,24 +235,17 @@ private fun BookshelfScreen(
         }
     }
     val headerColor = if (hasBackgroundImage) Color.White else MiuixTheme.colorScheme.onBackground
-    val headerGlassColor = homeGlassColor()
     Scaffold(
         modifier = Modifier.fillMaxSize().padding(top = HOME_PAGE_TOP_OFFSET),
         containerColor = Color.Transparent,
         topBar = {
             Column(
                 modifier = Modifier
-                    .then(
-                        if (liquidGlassEnabled) {
-                            homeGlassModifier(backdrop, headerGlassColor, homeTopBarShape())
+                    .background(
+                        if (hasBackgroundImage) {
+                            Color.Transparent
                         } else {
-                            Modifier.background(
-                                if (hasBackgroundImage) {
-                                    Color.Transparent
-                                } else {
-                                    MiuixTheme.colorScheme.surface.copy(alpha = 0.96f)
-                                },
-                            )
+                            MiuixTheme.colorScheme.surface.copy(alpha = 0.96f)
                         },
                     )
                     .statusBarsPadding(),
@@ -396,85 +398,150 @@ private fun BookRow(
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    if (liquidGlassEnabled) {
+        RealtimeGlassCard(
+            backdrop = backdrop,
+            onClick = onClick,
+        ) {
+            BookRowContent(book = book, onDelete = onDelete)
+        }
+    } else {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            cornerRadius = CardDefaults.CornerRadius,
+            pressFeedbackType = PressFeedbackType.Sink,
+            showIndication = true,
+            onClick = onClick,
+        ) {
+            BookRowContent(book = book, onDelete = onDelete)
+        }
+    }
+}
+
+@Composable
+private fun RealtimeGlassCard(
+    backdrop: Backdrop,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressProgress = remember { Animatable(0f) }
+    val animationSpec = spring<Float>(
+        dampingRatio = 0.8f,
+        stiffness = 600f,
+    )
+    val glassColor = homeGlassColor()
+    val cardShape = RoundedCornerShape(CardDefaults.CornerRadius)
+
+    LaunchedEffect(interactionSource) {
+        interactionSource.interactions.collect { interaction: Interaction ->
+            when (interaction) {
+                is PressInteraction.Press -> launch {
+                    pressProgress.animateTo(1f, animationSpec)
+                }
+                is PressInteraction.Release,
+                is PressInteraction.Cancel,
+                -> launch {
+                    pressProgress.animateTo(0f, animationSpec)
+                }
+                else -> Unit
+            }
+        }
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .then(
-                if (liquidGlassEnabled) {
-                    homeGlassModifier(
-                        backdrop = backdrop,
-                        color = homeGlassColor(),
-                        shape = RoundedCornerShape(CardDefaults.CornerRadius),
+            .drawBackdrop(
+                backdrop = backdrop,
+                shape = { cardShape },
+                effects = {
+                    vibrancy()
+                    blur(18.dp.toPx())
+                    lens(
+                        refractionHeight = 8.dp.toPx(),
+                        refractionAmount = 24.dp.toPx(),
+                        depthEffect = true,
                     )
-                } else {
-                    Modifier
                 },
+                layerBlock = {
+                    val scale = lerp(1f, 0.94f, pressProgress.value)
+                    scaleX = scale
+                    scaleY = scale
+                },
+                onDrawSurface = { drawRect(glassColor) },
+            )
+            .combinedClickable(
+                interactionSource = interactionSource,
+                indication = null,
+                onClick = onClick,
             ),
         cornerRadius = CardDefaults.CornerRadius,
-        pressFeedbackType = PressFeedbackType.Sink,
-        showIndication = true,
-        onClick = onClick,
-        colors = if (liquidGlassEnabled) {
-            CardDefaults.defaultColors(color = Color.Transparent)
-        } else {
-            CardDefaults.defaultColors()
-        },
+        colors = CardDefaults.defaultColors(color = Color.Transparent),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(14.dp),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (book.coverPath != null) {
-                AsyncImage(
-                    model = book.coverPath,
-                    contentDescription = null,
-                    modifier = Modifier.size(width = 58.dp, height = 82.dp).clip(RoundedCornerShape(8.dp)),
-                    contentScale = ContentScale.Crop,
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(width = 58.dp, height = 82.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MiuixTheme.colorScheme.surfaceContainerHigh),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = when (book.bookFormat) {
-                                BookFormat.CBZ -> MiuixIcons.Image
-                                else -> MiuixIcons.File
-                            },
-                            contentDescription = null,
-                            tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                        )
-                        Text(
-                            text = book.bookFormat.label,
-                            style = MiuixTheme.textStyles.body2,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
-                    }
+        content()
+    }
+}
+
+@Composable
+private fun BookRowContent(
+    book: BookEntity,
+    onDelete: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (book.coverPath != null) {
+            AsyncImage(
+                model = book.coverPath,
+                contentDescription = null,
+                modifier = Modifier.size(width = 58.dp, height = 82.dp).clip(RoundedCornerShape(8.dp)),
+                contentScale = ContentScale.Crop,
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .size(width = 58.dp, height = 82.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MiuixTheme.colorScheme.surfaceContainerHigh),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = when (book.bookFormat) {
+                            BookFormat.CBZ -> MiuixIcons.Image
+                            else -> MiuixIcons.File
+                        },
+                        contentDescription = null,
+                        tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    Text(
+                        text = book.bookFormat.label,
+                        style = MiuixTheme.textStyles.body2,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
                 }
             }
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(
-                    text = book.title,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MiuixTheme.textStyles.body1.copy(fontWeight = FontWeight.Medium),
-                )
-                if (book.author.isNotBlank()) {
-                    Text(book.author, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MiuixTheme.textStyles.body2)
-                }
-                Text(
-                    text = "${book.bookFormat.label} · ${formatBytes(book.sizeBytes)}",
-                    style = MiuixTheme.textStyles.body2,
-                )
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(
+                text = book.title,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MiuixTheme.textStyles.body1.copy(fontWeight = FontWeight.Medium),
+            )
+            if (book.author.isNotBlank()) {
+                Text(book.author, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MiuixTheme.textStyles.body2)
             }
-            IconButton(onClick = onDelete) {
-                Icon(MiuixIcons.Delete, contentDescription = stringResourceCompat(R.string.delete))
-            }
+            Text(
+                text = "${book.bookFormat.label} · ${formatBytes(book.sizeBytes)}",
+                style = MiuixTheme.textStyles.body2,
+            )
+        }
+        IconButton(onClick = onDelete) {
+            Icon(MiuixIcons.Delete, contentDescription = stringResourceCompat(R.string.delete))
         }
     }
 }
@@ -676,22 +743,8 @@ internal fun stringResourceCompat(id: Int, vararg args: Any): String =
     androidx.compose.ui.res.stringResource(id, *args)
 
 @Composable
-private fun homeGlassModifier(
-    backdrop: Backdrop,
-    color: Color,
-    shape: Shape,
-): Modifier = Modifier.drawBackdrop(
-    backdrop = backdrop,
-    shape = { shape },
-    effects = { blur(18.dp.toPx()) },
-    onDrawSurface = { drawRect(color) },
-)
-
-@Composable
 private fun homeGlassColor(): Color =
     Color.White.copy(alpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.08f else 0.16f)
-
-private fun homeTopBarShape() = RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp)
 
 private val HOME_PAGE_TOP_OFFSET = 12.dp
 
