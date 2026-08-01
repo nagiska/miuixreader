@@ -65,7 +65,6 @@ import coil3.compose.AsyncImage
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
-import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.effects.vibrancy
 import io.github.nagiska.miuixreader.R
 import io.github.nagiska.miuixreader.data.MIN_FONT_SCALE
@@ -779,12 +778,7 @@ private fun readerGlassModifier(
         shape = { shape },
         effects = {
             vibrancy()
-            blur(18.dp.toPx())
-            lens(
-                refractionHeight = 8.dp.toPx(),
-                refractionAmount = 24.dp.toPx(),
-                depthEffect = true,
-            )
+            blur(20.dp.toPx())
         },
         onDrawSurface = { drawRect(color) },
     )
@@ -794,7 +788,7 @@ private fun readerGlassModifier(
 
 @Composable
 private fun readerGlassColor(): Color =
-    Color.White.copy(alpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.07f else 0.14f)
+    Color.White.copy(alpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.08f else 0.18f)
 
 private const val CHROME_EXIT_MILLIS = 450L
 private const val CHROME_TAP_REGION = 0.24f

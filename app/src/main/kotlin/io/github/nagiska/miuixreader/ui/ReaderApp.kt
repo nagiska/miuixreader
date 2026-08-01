@@ -60,7 +60,6 @@ import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
-import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.effects.vibrancy
 import io.github.nagiska.miuixreader.R
 import io.github.nagiska.miuixreader.data.AppThemeMode
@@ -463,12 +462,7 @@ private fun RealtimeGlassCard(
                 shape = { cardShape },
                 effects = {
                     vibrancy()
-                    blur(18.dp.toPx())
-                    lens(
-                        refractionHeight = 8.dp.toPx(),
-                        refractionAmount = 24.dp.toPx(),
-                        depthEffect = true,
-                    )
+                    blur(20.dp.toPx())
                 },
                 layerBlock = {
                     val scale = lerp(1f, 0.94f, pressProgress.value)
