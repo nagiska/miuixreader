@@ -60,6 +60,8 @@ import coil3.compose.AsyncImage
 import com.kyant.backdrop.Backdrop
 import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
+import com.kyant.backdrop.effects.lens
+import com.kyant.backdrop.effects.vibrancy
 import io.github.nagiska.miuixreader.R
 import io.github.nagiska.miuixreader.data.MIN_FONT_SCALE
 import io.github.nagiska.miuixreader.data.MAX_FONT_SCALE
@@ -180,13 +182,13 @@ fun ReaderChrome(
         enabled = autoHideEnabled && chrome.visible && chrome.panel == ReaderPanel.NONE,
     ) { chrome.hide() }
     val dismissModifier = if (
-        autoHideEnabled && chrome.visible && chrome.panel == ReaderPanel.NONE
+        autoHideEnabled && chrome.visible
     ) {
         Modifier.pointerInput(Unit) {
             awaitEachGesture {
                 val down = awaitFirstDown(
-                    requireUnconsumed = false,
-                    pass = PointerEventPass.Initial,
+                    requireUnconsumed = true,
+                    pass = PointerEventPass.Main,
                 )
                 val up = waitForUpOrCancellation(pass = PointerEventPass.Final)
                 if (up == null) return@awaitEachGesture
@@ -751,7 +753,15 @@ private fun readerGlassModifier(
     Modifier.drawBackdrop(
         backdrop = backdrop,
         shape = { shape },
-        effects = { blur(18.dp.toPx()) },
+        effects = {
+            vibrancy()
+            blur(18.dp.toPx())
+            lens(
+                refractionHeight = 8.dp.toPx(),
+                refractionAmount = 24.dp.toPx(),
+                depthEffect = true,
+            )
+        },
         onDrawSurface = { drawRect(color) },
     )
 } else {
@@ -760,7 +770,7 @@ private fun readerGlassModifier(
 
 @Composable
 private fun readerGlassColor(): Color =
-    Color.White.copy(alpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.07f else 0.20f)
+    Color.White.copy(alpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.07f else 0.14f)
 
 private const val CHROME_EXIT_MILLIS = 450L
 private const val CHROME_TAP_REGION = 0.24f

@@ -599,17 +599,20 @@ private fun SettingsScreen(
 ) {
     val glassEnabled = preferences.liquidGlassEnabled
     val hasBackgroundImage = preferences.bookshelfBackgroundPath != null
+    val settingsTopBarColor = if (hasBackgroundImage) {
+        Color.Transparent
+    } else {
+        MiuixTheme.colorScheme.surface.copy(alpha = 0.96f)
+    }
     Scaffold(
-        containerColor = if (hasBackgroundImage) {
-            MiuixTheme.colorScheme.background.copy(alpha = 0.76f)
-        } else {
-            Color.Transparent
-        },
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 title = stringResourceCompat(R.string.settings),
-                modifier = Modifier.background(MiuixTheme.colorScheme.surface.copy(alpha = 0.96f)),
-                color = MiuixTheme.colorScheme.surface.copy(alpha = 0.96f),
+                modifier = Modifier
+                    .statusBarsPadding()
+                    .background(settingsTopBarColor),
+                color = settingsTopBarColor,
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(MiuixIcons.Back, contentDescription = stringResourceCompat(R.string.back))
@@ -626,6 +629,9 @@ private fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp),
+                colors = CardDefaults.defaultColors(
+                    color = MiuixTheme.colorScheme.surfaceContainer,
+                ),
                 cornerRadius = CardDefaults.CornerRadius,
             ) {
                 Text(
@@ -697,6 +703,9 @@ private fun BackgroundPreferenceCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp),
+        colors = CardDefaults.defaultColors(
+            color = MiuixTheme.colorScheme.surfaceContainer,
+        ),
         cornerRadius = CardDefaults.CornerRadius,
         pressFeedbackType = PressFeedbackType.Sink,
         showIndication = true,
