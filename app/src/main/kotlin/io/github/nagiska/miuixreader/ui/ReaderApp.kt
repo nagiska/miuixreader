@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -215,32 +216,21 @@ private fun BookshelfScreen(
         containerColor = Color.Transparent,
         topBar = {
             Column(
-                modifier = Modifier.background(
-                    if (hasBackgroundImage) {
-                        Color.Transparent
-                    } else {
-                        MiuixTheme.colorScheme.surface.copy(alpha = 0.96f)
-                    },
-                ),
+                modifier = Modifier
+                    .background(
+                        if (hasBackgroundImage) {
+                            Color.Transparent
+                        } else {
+                            MiuixTheme.colorScheme.surface.copy(alpha = 0.96f)
+                        },
+                    )
+                    .statusBarsPadding(),
             ) {
-                Box(
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(if (titleCollapsed) 44.dp else 56.dp),
-                    contentAlignment = if (titleCollapsed) Alignment.Center else Alignment.CenterStart,
-                ) {
-                    Text(
-                        text = stringResourceCompat(R.string.bookshelf_title),
-                        color = headerColor,
-                        fontSize = if (titleCollapsed) 16.sp else 22.sp,
-                        fontWeight = if (titleCollapsed) FontWeight.Medium else FontWeight.Bold,
-                        maxLines = 1,
-                        modifier = Modifier.padding(horizontal = 20.dp),
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        .height(52.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     if (searchVisible) {
@@ -251,41 +241,44 @@ private fun BookshelfScreen(
                                 onQueryChange("")
                                 onSearchVisibleChange(false)
                             },
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).padding(start = 16.dp),
                         )
+                        Spacer(Modifier.width(8.dp))
                     } else {
-                        Text(
-                            text = when {
-                                state.query.isNotBlank() && state.books.isEmpty() ->
-                                    stringResourceCompat(R.string.search_empty)
-                                state.books.isEmpty() -> stringResourceCompat(R.string.bookshelf_empty_short)
-                                else -> pluralResourceCompat(R.plurals.books_count, state.books.size)
-                            },
+                        Box(
                             modifier = Modifier.weight(1f),
-                            style = MiuixTheme.textStyles.body2,
-                            color = headerColor,
-                        )
-                    }
-                    IconButton(onClick = { onSearchVisibleChange(true) }) {
-                        Icon(
-                            MiuixIcons.Search,
-                            contentDescription = stringResourceCompat(R.string.search),
-                            tint = headerColor,
-                        )
-                    }
-                    IconButton(onClick = onImport) {
-                        Icon(
-                            MiuixIcons.Add,
-                            contentDescription = stringResourceCompat(R.string.import_books),
-                            tint = headerColor,
-                        )
-                    }
-                    IconButton(onClick = onSettings) {
-                        Icon(
-                            MiuixIcons.Settings,
-                            contentDescription = stringResourceCompat(R.string.settings),
-                            tint = headerColor,
-                        )
+                            contentAlignment = if (titleCollapsed) Alignment.Center else Alignment.CenterStart,
+                        ) {
+                            Text(
+                                text = stringResourceCompat(R.string.bookshelf_title),
+                                color = headerColor,
+                                fontSize = if (titleCollapsed) 16.sp else 22.sp,
+                                fontWeight = if (titleCollapsed) FontWeight.Medium else FontWeight.Bold,
+                                maxLines = 1,
+                                modifier = Modifier.padding(horizontal = 20.dp),
+                            )
+                        }
+                        IconButton(onClick = { onSearchVisibleChange(true) }) {
+                            Icon(
+                                MiuixIcons.Search,
+                                contentDescription = stringResourceCompat(R.string.search),
+                                tint = headerColor,
+                            )
+                        }
+                        IconButton(onClick = onImport) {
+                            Icon(
+                                MiuixIcons.Add,
+                                contentDescription = stringResourceCompat(R.string.import_books),
+                                tint = headerColor,
+                            )
+                        }
+                        IconButton(onClick = onSettings) {
+                            Icon(
+                                MiuixIcons.Settings,
+                                contentDescription = stringResourceCompat(R.string.settings),
+                                tint = headerColor,
+                            )
+                        }
                     }
                 }
             }
@@ -639,10 +632,6 @@ private fun BackgroundPreferenceCard(
 @Composable
 internal fun stringResourceCompat(id: Int, vararg args: Any): String =
     androidx.compose.ui.res.stringResource(id, *args)
-
-@Composable
-private fun pluralResourceCompat(id: Int, count: Int): String =
-    androidx.compose.ui.res.pluralStringResource(id, count, count)
 
 private fun formatBytes(bytes: Long): String = when {
     bytes >= 1024 * 1024 -> String.format(Locale.getDefault(), "%.1f MB", bytes / (1024f * 1024f))
