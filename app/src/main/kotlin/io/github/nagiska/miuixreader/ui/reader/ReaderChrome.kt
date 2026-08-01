@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RectangleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
@@ -432,6 +433,7 @@ private fun ReaderGlassSheet(
     val density = LocalDensity.current
     val dismissThreshold = with(density) { 120.dp.toPx() }
     val glassColor = readerGlassColor()
+    val panelGlassColor = glassColor.copy(alpha = (glassColor.alpha + 0.08f).coerceAtMost(0.45f))
     val sheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
 
     LaunchedEffect(show) {
@@ -447,6 +449,21 @@ private fun ReaderGlassSheet(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .then(
+                    if (liquidGlassEnabled) {
+                        Modifier.drawBackdrop(
+                            backdrop = backdrop,
+                            shape = { RectangleShape },
+                            effects = {
+                                vibrancy()
+                                blur(20.dp.toPx())
+                            },
+                            onDrawSurface = { drawRect(glassColor) },
+                        )
+                    } else {
+                        Modifier
+                    },
+                )
                 .pointerInput(show) {
                     awaitEachGesture {
                         val down = awaitFirstDown(
@@ -479,7 +496,7 @@ private fun ReaderGlassSheet(
                                 readerGlassModifier(
                                     preferencesEnabled = true,
                                     backdrop = backdrop,
-                                    color = glassColor,
+                                    color = panelGlassColor,
                                     shape = sheetShape,
                                 )
                             } else {
