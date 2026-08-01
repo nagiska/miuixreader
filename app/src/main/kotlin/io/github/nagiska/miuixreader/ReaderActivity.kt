@@ -453,7 +453,7 @@ class ReaderActivity : FragmentActivity() {
             reveal()
             return
         }
-        capturePublicationBackdrop(onSuccess = reveal)
+        capturePublicationBackdrop(onSuccess = { reveal() })
     }
 
     private fun startBackdropCaptureLoop() {
@@ -503,21 +503,22 @@ class ReaderActivity : FragmentActivity() {
             return
         }
         try {
+            val listener = PixelCopy.OnPixelCopyFinishedListener { result ->
+                capturePending = false
+                if (isDestroyed) return@OnPixelCopyFinishedListener
+                if (result == PixelCopy.SUCCESS) {
+                    captureIndex = (index + 1) % captureBitmaps.size
+                    publicationBackdrop.setBitmap(bitmap, width, height)
+                    onSuccess?.invoke()
+                } else if (onSuccess != null) {
+                    publicationBackdrop.clear()
+                    onSuccess()
+                }
+            }
             PixelCopy.request(
                 source,
                 bitmap,
-                { result ->
-                    capturePending = false
-                    if (isDestroyed) return@request
-                    if (result == PixelCopy.SUCCESS) {
-                        captureIndex = (index + 1) % captureBitmaps.size
-                        publicationBackdrop.setBitmap(bitmap, width, height)
-                        onSuccess?.invoke()
-                    } else if (onSuccess != null) {
-                        publicationBackdrop.clear()
-                        onSuccess()
-                    }
-                },
+                listener,
                 Handler(Looper.getMainLooper()),
             )
         } catch (_: Exception) {

@@ -412,7 +412,7 @@ private fun BookRow(
                                 else -> MiuixIcons.File
                             },
                             contentDescription = null,
-                            tint = MiuixTheme.colorScheme.onSurfaceVariant,
+                            tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         )
                         Text(
                             text = book.bookFormat.label,
