@@ -281,12 +281,19 @@ private fun ReaderTopBar(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top))
-                .then(readerGlassModifier(preferences.liquidGlassEnabled, backdrop, glassColor, topShape())),
+                .then(readerGlassModifier(preferences.liquidGlassEnabled, backdrop, glassColor, topShape()))
+                .then(
+                    if (!preferences.liquidGlassEnabled) {
+                        Modifier.background(MiuixTheme.colorScheme.surface.copy(alpha = 0.96f))
+                    } else {
+                        Modifier
+                    },
+                ),
         ) {
             SmallTopAppBar(
                 title = title,
-                color = if (preferences.liquidGlassEnabled) Color.Transparent else MiuixTheme.colorScheme.surface.copy(alpha = 0.96f),
+                modifier = Modifier.windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top)),
+                color = Color.Transparent,
                 navigationIcon = {
                     GlassCircleButton(
                         enabled = preferences.liquidGlassEnabled,
