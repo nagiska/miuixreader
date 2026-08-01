@@ -32,7 +32,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RectangleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
@@ -453,7 +452,7 @@ private fun ReaderGlassSheet(
                     if (liquidGlassEnabled) {
                         Modifier.drawBackdrop(
                             backdrop = backdrop,
-                            shape = { RectangleShape },
+                            shape = { RoundedCornerShape(0.dp) },
                             effects = {
                                 vibrancy()
                                 blur(20.dp.toPx())
