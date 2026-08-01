@@ -20,13 +20,17 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -48,6 +52,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -182,13 +187,13 @@ fun ReaderChrome(
         enabled = autoHideEnabled && chrome.visible && chrome.panel == ReaderPanel.NONE,
     ) { chrome.hide() }
     val dismissModifier = if (
-        autoHideEnabled && chrome.visible
+        autoHideEnabled && chrome.visible && chrome.panel == ReaderPanel.NONE
     ) {
         Modifier.pointerInput(Unit) {
             awaitEachGesture {
                 val down = awaitFirstDown(
-                    requireUnconsumed = true,
-                    pass = PointerEventPass.Main,
+                    requireUnconsumed = false,
+                    pass = PointerEventPass.Initial,
                 )
                 val up = waitForUpOrCancellation(pass = PointerEventPass.Final)
                 if (up == null) return@awaitEachGesture
@@ -277,6 +282,7 @@ private fun ReaderTopBar(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top))
                 .then(readerGlassModifier(preferences.liquidGlassEnabled, backdrop, glassColor, topShape())),
         ) {
             SmallTopAppBar(
@@ -416,6 +422,7 @@ private fun ReaderGlassSheet(
     content: @Composable () -> Unit,
 ) {
     var offsetY by remember { mutableStateOf(0f) }
+    var sheetHeight by remember { mutableStateOf(0) }
     val density = LocalDensity.current
     val dismissThreshold = with(density) { 120.dp.toPx() }
     val glassColor = readerGlassColor()
@@ -432,7 +439,23 @@ private fun ReaderGlassSheet(
         exit = readerExit { it } + fadeOut(animationSpec = folmeSpring(0.9f, 0.38f)),
     ) {
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(show) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(
+                            requireUnconsumed = false,
+                            pass = PointerEventPass.Initial,
+                        )
+                        val up = waitForUpOrCancellation(pass = PointerEventPass.Final)
+                        if (up == null) return@awaitEachGesture
+                        val controlRegion = size.height * CHROME_TAP_REGION
+                        val aboveSheet = down.position.y < size.height - sheetHeight
+                        if (down.position.y > controlRegion && aboveSheet) {
+                            onDismiss()
+                        }
+                    }
+                },
             contentAlignment = Alignment.BottomCenter,
         ) {
             Box(
@@ -444,6 +467,7 @@ private fun ReaderGlassSheet(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .onSizeChanged { sheetHeight = it.height }
                         .then(
                             if (liquidGlassEnabled) {
                                 readerGlassModifier(
