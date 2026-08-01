@@ -82,6 +82,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -139,6 +140,9 @@ class ReaderActivity : FragmentActivity() {
     private var latestPreferences = ReaderPreferences()
     private var initialPreferences = ReaderPreferences()
     private var capturePending = false
+    private var captureIndex = 0
+    private var captureBitmaps: Array<Bitmap?> = arrayOf(null, null)
+    private var captureLoopJob: kotlinx.coroutines.Job? = null
     private var cachedBackgroundSignature: String? = null
     private var cachedBackgroundDataUri: String? = null
 
@@ -397,6 +401,7 @@ class ReaderActivity : FragmentActivity() {
                         autoHideEnabled = !touchExplorationEnabled,
                         onVisibilityChanged = { visible ->
                             if (!visible && !chromeState.visible) {
+                                stopBackdropCaptureLoop()
                                 composeView.visibility = View.GONE
                                 publicationBackdrop.clear()
                             }
@@ -433,6 +438,7 @@ class ReaderActivity : FragmentActivity() {
         val view = chromeView ?: return
         if (chromeState.visible) {
             chromeState.hide()
+            stopBackdropCaptureLoop()
             return
         }
         if (capturePending) return
@@ -441,58 +447,85 @@ class ReaderActivity : FragmentActivity() {
             view.visibility = View.VISIBLE
             view.bringToFront()
             chromeState.show()
+            startBackdropCaptureLoop()
         }
         if (!latestPreferences.liquidGlassEnabled) {
             reveal()
             return
         }
-        val width = window.decorView.width
-        val height = window.decorView.height
-        if (width <= 0 || height <= 0) {
-            publicationBackdrop.clear()
-            reveal()
-            return
+        capturePublicationBackdrop(onSuccess = reveal)
+    }
+
+    private fun startBackdropCaptureLoop() {
+        stopBackdropCaptureLoop()
+        if (!latestPreferences.liquidGlassEnabled) return
+        captureLoopJob = lifecycleScope.launch {
+            while (isActive) {
+                capturePublicationBackdrop()
+                delay(BACKDROP_CAPTURE_INTERVAL_MILLIS)
+            }
         }
+    }
+
+    private fun stopBackdropCaptureLoop() {
+        captureLoopJob?.cancel()
+        captureLoopJob = null
+    }
+
+    private fun capturePublicationBackdrop(onSuccess: (() -> Unit)? = null) {
+        if (capturePending || isDestroyed || !latestPreferences.liquidGlassEnabled) return
+        val source = (navigator as? VisualNavigator)?.publicationView
+            ?.takeIf { it.width > 0 && it.height > 0 }
+            ?: window.decorView
+        val width = source.width
+        val height = source.height
+        if (width <= 0 || height <= 0) return
         capturePending = true
         val captureScale = minOf(1f, MAX_CAPTURE_DIMENSION / maxOf(width, height).toFloat())
         val captureWidth = maxOf(1, (width * captureScale).toInt())
         val captureHeight = maxOf(1, (height * captureScale).toInt())
-        val bitmap = try {
-            Bitmap.createBitmap(captureWidth, captureHeight, Bitmap.Config.ARGB_8888)
-        } catch (_: OutOfMemoryError) {
-            null
-        } catch (_: Exception) {
-            null
+        val index = captureIndex
+        var bitmap = captureBitmaps[index]
+        if (bitmap == null || bitmap.width != captureWidth || bitmap.height != captureHeight) {
+            bitmap = try {
+                Bitmap.createBitmap(captureWidth, captureHeight, Bitmap.Config.ARGB_8888)
+            } catch (_: Throwable) {
+                null
+            }
+            captureBitmaps[index] = bitmap
         }
         if (bitmap == null) {
-            publicationBackdrop.clear()
-            reveal()
+            capturePending = false
+            if (onSuccess != null) {
+                publicationBackdrop.clear()
+                onSuccess()
+            }
             return
         }
         try {
             PixelCopy.request(
-                window,
+                source,
                 bitmap,
-                callback@{ result ->
-                    if (isDestroyed) {
-                        capturePending = false
-                        bitmap.recycle()
-                        return@callback
-                    }
+                { result ->
+                    capturePending = false
+                    if (isDestroyed) return@request
                     if (result == PixelCopy.SUCCESS) {
+                        captureIndex = (index + 1) % captureBitmaps.size
                         publicationBackdrop.setBitmap(bitmap, width, height)
-                    } else {
-                        bitmap.recycle()
+                        onSuccess?.invoke()
+                    } else if (onSuccess != null) {
                         publicationBackdrop.clear()
+                        onSuccess()
                     }
-                    reveal()
                 },
                 Handler(Looper.getMainLooper()),
             )
         } catch (_: Exception) {
-            bitmap.recycle()
-            publicationBackdrop.clear()
-            reveal()
+            capturePending = false
+            if (onSuccess != null) {
+                publicationBackdrop.clear()
+                onSuccess()
+            }
         }
     }
 
@@ -774,9 +807,12 @@ class ReaderActivity : FragmentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        stopBackdropCaptureLoop()
         chromeView = null
         navigator = null
         epubNavigator = null
+        captureBitmaps.forEach { it?.recycle() }
+        captureBitmaps = arrayOf(null, null)
         publication?.close()
         publication = null
         publicationBackdrop.clear()
@@ -791,6 +827,7 @@ class ReaderActivity : FragmentActivity() {
         private const val TXT_PROGRESSION_V2_PREFIX = "txt2:"
         private const val CHROME_TAP_REGION = 0.24f
         private const val MAX_CAPTURE_DIMENSION = 1280
+        private const val BACKDROP_CAPTURE_INTERVAL_MILLIS = 100L
 
         fun intent(context: android.content.Context, bookId: Long) =
             android.content.Intent(context, ReaderActivity::class.java)

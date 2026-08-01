@@ -381,7 +381,7 @@ private fun ReaderBottomBar(
                             liquidGlassEnabled,
                             backdrop,
                             glassColor,
-                            RoundedCornerShape(8.dp),
+                            RoundedCornerShape(CardDefaults.CornerRadius),
                         ),
                     ),
                 colors = if (liquidGlassEnabled) {
@@ -389,7 +389,7 @@ private fun ReaderBottomBar(
                 } else {
                     CardDefaults.defaultColors()
                 },
-                cornerRadius = 8.dp,
+                cornerRadius = CardDefaults.CornerRadius,
             ) {
                 Text(
                     text = label,
@@ -588,8 +588,9 @@ private fun ReaderBackgroundSheet(
                             selected = imageSelected
                         },
                     colors = CardDefaults.defaultColors(color = Color.Transparent),
-                    cornerRadius = 8.dp,
+                    cornerRadius = CardDefaults.CornerRadius,
                     pressFeedbackType = PressFeedbackType.Sink,
+                    showIndication = true,
                     holdDownState = imageSelected,
                     onClick = onUseImage,
                 ) {
@@ -633,8 +634,9 @@ private fun BackgroundSwatch(
                 this.selected = selected
             },
         colors = CardDefaults.defaultColors(color = color),
-        cornerRadius = 8.dp,
+        cornerRadius = CardDefaults.CornerRadius,
         pressFeedbackType = PressFeedbackType.Sink,
+        showIndication = true,
         holdDownState = selected,
         onClick = onClick,
     ) {

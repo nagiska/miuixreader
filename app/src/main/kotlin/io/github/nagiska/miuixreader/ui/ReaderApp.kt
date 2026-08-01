@@ -19,7 +19,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -47,6 +46,7 @@ import io.github.nagiska.miuixreader.R
 import io.github.nagiska.miuixreader.data.AppThemeMode
 import io.github.nagiska.miuixreader.data.BackgroundTarget
 import io.github.nagiska.miuixreader.data.BookEntity
+import io.github.nagiska.miuixreader.data.BookFormat
 import io.github.nagiska.miuixreader.data.ReaderBackgroundMode
 import io.github.nagiska.miuixreader.data.ReaderPreferences
 import io.github.nagiska.miuixreader.data.bookFormat
@@ -55,6 +55,7 @@ import java.util.Locale
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Scaffold
@@ -62,12 +63,14 @@ import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Add
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.icon.extended.Delete
+import top.yukonga.miuix.kmp.icon.extended.File
 import top.yukonga.miuix.kmp.icon.extended.Image
 import top.yukonga.miuix.kmp.icon.extended.Search
 import top.yukonga.miuix.kmp.icon.extended.Settings
@@ -223,13 +226,13 @@ private fun BookshelfScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(if (titleCollapsed) 46.dp else 64.dp),
+                        .height(if (titleCollapsed) 44.dp else 56.dp),
                     contentAlignment = if (titleCollapsed) Alignment.Center else Alignment.CenterStart,
                 ) {
                     Text(
                         text = stringResourceCompat(R.string.bookshelf_title),
                         color = headerColor,
-                        fontSize = if (titleCollapsed) 17.sp else 26.sp,
+                        fontSize = if (titleCollapsed) 16.sp else 22.sp,
                         fontWeight = if (titleCollapsed) FontWeight.Medium else FontWeight.Bold,
                         maxLines = 1,
                         modifier = Modifier.padding(horizontal = 20.dp),
@@ -377,8 +380,9 @@ private fun BookRow(
     Card(
         modifier = Modifier
             .fillMaxWidth(),
-        cornerRadius = 8.dp,
+        cornerRadius = CardDefaults.CornerRadius,
         pressFeedbackType = PressFeedbackType.Sink,
+        showIndication = true,
         onClick = onClick,
     ) {
         Row(
@@ -401,7 +405,21 @@ private fun BookRow(
                         .background(MiuixTheme.colorScheme.surfaceContainerHigh),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(book.bookFormat.label, style = MiuixTheme.textStyles.body2)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = when (book.bookFormat) {
+                                BookFormat.CBZ -> MiuixIcons.Image
+                                else -> MiuixIcons.File
+                            },
+                            contentDescription = null,
+                            tint = MiuixTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = book.bookFormat.label,
+                            style = MiuixTheme.textStyles.body2,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                 }
             }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -439,36 +457,31 @@ private fun SearchField(
         focusRequester.requestFocus()
         keyboardController?.show()
     }
-    Row(
-        modifier = modifier
-            .height(44.dp)
-            .background(
-                MiuixTheme.colorScheme.surfaceContainerHigh,
-                RoundedCornerShape(14.dp),
+    TextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = modifier.focusRequester(focusRequester),
+        label = stringResourceCompat(R.string.search_hint),
+        useLabelAsPlaceholder = true,
+        singleLine = true,
+        leadingIcon = {
+            Icon(
+                MiuixIcons.Search,
+                contentDescription = null,
+                modifier = Modifier.padding(start = 8.dp),
             )
-            .padding(start = 14.dp, end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(MiuixIcons.Search, contentDescription = null, modifier = Modifier.size(20.dp))
-        BasicTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            modifier = Modifier.weight(1f).padding(horizontal = 10.dp).focusRequester(focusRequester),
-            singleLine = true,
-            decorationBox = { field ->
-                if (query.isBlank()) Text(stringResourceCompat(R.string.search_hint), style = MiuixTheme.textStyles.body2)
-                field()
-            },
-        )
-        IconButton(
-            onClick = {
-                keyboardController?.hide()
-                onClose()
-            },
-        ) {
-            Icon(MiuixIcons.Close, contentDescription = stringResourceCompat(R.string.close))
-        }
-    }
+        },
+        trailingIcon = {
+            IconButton(
+                onClick = {
+                    keyboardController?.hide()
+                    onClose()
+                },
+            ) {
+                Icon(MiuixIcons.Close, contentDescription = stringResourceCompat(R.string.close))
+            }
+        },
+    )
 }
 
 @Composable
@@ -511,7 +524,7 @@ private fun SettingsScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp),
-                cornerRadius = 8.dp,
+                cornerRadius = CardDefaults.CornerRadius,
             ) {
                 Text(
                     text = stringResourceCompat(R.string.theme_mode),
@@ -582,8 +595,9 @@ private fun BackgroundPreferenceCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp),
-        cornerRadius = 8.dp,
+        cornerRadius = CardDefaults.CornerRadius,
         pressFeedbackType = PressFeedbackType.Sink,
+        showIndication = true,
         onClick = onClick,
     ) {
         Row(
