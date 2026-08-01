@@ -333,6 +333,7 @@ private fun GlassCircleButton(
     content: @Composable () -> Unit,
 ) {
     if (enabled) {
+        val glassColor = readerGlassColor()
         Box(
             modifier = Modifier
                 .size(40.dp)
@@ -340,7 +341,7 @@ private fun GlassCircleButton(
                     backdrop = backdrop,
                     shape = { RoundedCornerShape(50) },
                     effects = { blur(14.dp.toPx()) },
-                    onDrawSurface = { drawRect(readerGlassColor()) },
+                    onDrawSurface = { drawRect(glassColor) },
                 ),
             contentAlignment = Alignment.Center,
         ) {
