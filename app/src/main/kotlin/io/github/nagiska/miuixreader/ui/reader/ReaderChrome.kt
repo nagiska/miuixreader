@@ -455,7 +455,7 @@ private fun ReaderGlassSheet(
                             },
                         )
                         .navigationBarsPadding()
-                        .padding(horizontal = 16.dp, bottom = 16.dp),
+                        .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
                 ) {
                     Box(
                         modifier = Modifier
