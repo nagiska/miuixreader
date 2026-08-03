@@ -52,6 +52,7 @@
     <string name="reader_page_count">第 %1$d / %2$d 页</string>
     <string name="reader_position_count">位置 %1$d / %2$d · %3$d%%</string>
     <string name="reader_progress_percent">%1$d%%</string>
+    <string name="reader_progress">阅读进度</string>
     <string name="delete">删除</string>
     <string name="cancel">取消</string>
     <string name="delete_book_title">删除这本书？</string>

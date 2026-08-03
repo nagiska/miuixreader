@@ -53,6 +53,7 @@
     <string name="reader_page_count">Page %1$d of %2$d</string>
     <string name="reader_position_count">Position %1$d of %2$d · %3$d%%</string>
     <string name="reader_progress_percent">%1$d%%</string>
+    <string name="reader_progress">Reading progress</string>
     <string name="delete">Delete</string>
     <string name="cancel">Cancel</string>
     <string name="delete_book_title">Delete this book?</string>

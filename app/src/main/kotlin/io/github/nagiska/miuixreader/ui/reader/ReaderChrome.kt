@@ -1,6 +1,6 @@
 package io.github.nagiska.miuixreader.ui.reader
 
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -38,6 +38,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -76,6 +77,8 @@ import io.github.nagiska.miuixreader.data.ReaderFontFamily
 import io.github.nagiska.miuixreader.data.ReaderPreferences
 import io.github.nagiska.miuixreader.data.contrastTextColor
 import io.github.nagiska.miuixreader.ui.stringResourceCompat
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.anim.folmeSpring
 import top.yukonga.miuix.kmp.basic.Card
@@ -146,10 +149,11 @@ class ReaderChromeState {
     }
 }
 
-enum class ReaderPanel { NONE, TYPOGRAPHY, BACKGROUND }
+enum class ReaderPanel { NONE, TYPOGRAPHY, BACKGROUND, PROGRESS }
 
 data class ReaderPositionLabel(
     val value: String = "",
+    val fraction: Float = 0f,
 )
 
 @Composable
@@ -173,6 +177,7 @@ fun ReaderChrome(
     onClearBackground: () -> Unit,
     autoHideEnabled: Boolean = true,
     onVisibilityChanged: (Boolean) -> Unit = {},
+    onSeekProgress: (Float) -> Unit = {},
 ) {
     chrome.AutoHide(enabled = autoHideEnabled)
     LaunchedEffect(chrome.visible) {
@@ -183,10 +188,37 @@ fun ReaderChrome(
             if (!chrome.visible) onVisibilityChanged(false)
         }
     }
-    BackHandler(enabled = chrome.panel != ReaderPanel.NONE) { chrome.closePanel() }
-    BackHandler(
+    var sheetBackProgress by remember { mutableFloatStateOf(0f) }
+    var chromeBackProgress by remember { mutableFloatStateOf(0f) }
+    // Predictive back: an open sheet follows the back gesture down, then closes.
+    PredictiveBackHandler(enabled = chrome.panel != ReaderPanel.NONE) { progress ->
+        try {
+            progress.collect { event -> sheetBackProgress = event.progress }
+            sheetBackProgress = 1f
+            chrome.closePanel()
+        } catch (_: CancellationException) {
+            sheetBackProgress = 0f
+        } finally {
+            delay(CHROME_EXIT_MILLIS)
+            sheetBackProgress = 0f
+        }
+    }
+    // Predictive back: visible chrome bars follow the gesture (top bar slides
+    // up, bottom bar slides down), then hide.
+    PredictiveBackHandler(
         enabled = autoHideEnabled && chrome.visible && chrome.panel == ReaderPanel.NONE,
-    ) { chrome.hide() }
+    ) { progress ->
+        try {
+            progress.collect { event -> chromeBackProgress = event.progress }
+            chromeBackProgress = 1f
+            chrome.hide()
+        } catch (_: CancellationException) {
+            chromeBackProgress = 0f
+        } finally {
+            delay(CHROME_EXIT_MILLIS)
+            chromeBackProgress = 0f
+        }
+    }
     var topBarBottom by remember { mutableStateOf(0f) }
     var bottomBarTop by remember { mutableStateOf(Float.MAX_VALUE) }
     val dismissModifier = if (
@@ -230,6 +262,7 @@ fun ReaderChrome(
                 onBack = onBack,
                 onTypography = { chrome.open(ReaderPanel.TYPOGRAPHY) },
                 onBackground = { chrome.open(ReaderPanel.BACKGROUND) },
+                backProgress = chromeBackProgress,
                 modifier = Modifier.onGloballyPositioned {
                     topBarBottom = it.positionInWindow().y + it.size.height.toFloat()
                 },
@@ -239,6 +272,8 @@ fun ReaderChrome(
                 label = progress.value,
                 backdrop = backdrop,
                 liquidGlassEnabled = preferences.liquidGlassEnabled,
+                onClick = { chrome.open(ReaderPanel.PROGRESS) },
+                backProgress = chromeBackProgress,
                 modifier = Modifier.onGloballyPositioned {
                     bottomBarTop = it.positionInWindow().y
                 },
@@ -249,6 +284,7 @@ fun ReaderChrome(
             preferences = preferences,
             backdrop = backdrop,
             onDismiss = chrome::hide,
+            backProgress = sheetBackProgress,
             onFontFamilyChange = onFontFamilyChange,
             onFontScaleChange = onFontScaleChange,
             onFontWeightChange = onFontWeightChange,
@@ -260,11 +296,21 @@ fun ReaderChrome(
             imagePath = readerImagePath,
             imageScrim = readerImageScrim,
             onDismiss = chrome::hide,
+            backProgress = sheetBackProgress,
             onFollowTheme = onBackgroundFollowTheme,
             onColorChange = onBackgroundColorChange,
             onUseImage = onBackgroundImage,
             onImport = onImportBackground,
             onClearImage = onClearBackground,
+        )
+        ReaderProgressSheet(
+            show = chrome.panel == ReaderPanel.PROGRESS,
+            fraction = progress.fraction,
+            liquidGlassEnabled = preferences.liquidGlassEnabled,
+            backdrop = backdrop,
+            onDismiss = chrome::hide,
+            onSeek = onSeekProgress,
+            backProgress = sheetBackProgress,
         )
     }
 }
@@ -279,6 +325,7 @@ private fun ReaderTopBar(
     onBack: () -> Unit,
     onTypography: () -> Unit,
     onBackground: () -> Unit,
+    backProgress: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
     val glassColor = readerGlassColor()
@@ -291,6 +338,7 @@ private fun ReaderTopBar(
         Box(
             modifier = modifier
                 .fillMaxWidth()
+                .graphicsLayer { translationY = -backProgress * size.height }
                 .then(readerGlassModifier(preferences.liquidGlassEnabled, backdrop, glassColor, topShape()))
                 .then(
                     if (!preferences.liquidGlassEnabled) {
@@ -387,6 +435,8 @@ private fun ReaderBottomBar(
     label: String,
     backdrop: Backdrop,
     liquidGlassEnabled: Boolean,
+    onClick: (() -> Unit)? = null,
+    backProgress: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
     val glassColor = readerGlassColor()
@@ -404,8 +454,10 @@ private fun ReaderBottomBar(
             contentAlignment = Alignment.BottomCenter,
         ) {
             Card(
+                onClick = onClick,
                 modifier = modifier
                     .fillMaxWidth()
+                    .graphicsLayer { translationY = backProgress * size.height }
                     .then(
                         readerGlassModifier(
                             liquidGlassEnabled,
@@ -439,6 +491,7 @@ private fun ReaderGlassSheet(
     liquidGlassEnabled: Boolean,
     backdrop: Backdrop,
     onDismiss: () -> Unit,
+    backProgress: Float = 0f,
     content: @Composable () -> Unit,
 ) {
     var offsetY by remember { mutableStateOf(0f) }
@@ -482,7 +535,7 @@ private fun ReaderGlassSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp)
-                    .graphicsLayer { translationY = offsetY },
+                    .graphicsLayer { translationY = offsetY + backProgress * sheetHeight },
             ) {
                 Column(
                     modifier = Modifier
@@ -554,6 +607,7 @@ private fun ReaderTypographySheet(
     preferences: ReaderPreferences,
     backdrop: Backdrop,
     onDismiss: () -> Unit,
+    backProgress: Float = 0f,
     onFontFamilyChange: (ReaderFontFamily) -> Unit,
     onFontScaleChange: (Float) -> Unit,
     onFontWeightChange: (Int) -> Unit,
@@ -565,6 +619,7 @@ private fun ReaderTypographySheet(
         liquidGlassEnabled = preferences.liquidGlassEnabled,
         backdrop = backdrop,
         onDismiss = onDismiss,
+        backProgress = backProgress,
     ) {
         Column(
             modifier = Modifier
@@ -620,6 +675,7 @@ private fun ReaderBackgroundSheet(
     imagePath: String?,
     imageScrim: Float,
     onDismiss: () -> Unit,
+    backProgress: Float = 0f,
     onFollowTheme: () -> Unit,
     onColorChange: (Int) -> Unit,
     onUseImage: () -> Unit,
@@ -636,6 +692,7 @@ private fun ReaderBackgroundSheet(
         liquidGlassEnabled = preferences.liquidGlassEnabled,
         backdrop = backdrop,
         onDismiss = onDismiss,
+        backProgress = backProgress,
     ) {
         Column(
             modifier = Modifier
@@ -743,6 +800,61 @@ private fun ReaderBackgroundSheet(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ReaderProgressSheet(
+    show: Boolean,
+    fraction: Float,
+    liquidGlassEnabled: Boolean,
+    backdrop: Backdrop,
+    onDismiss: () -> Unit,
+    onSeek: (Float) -> Unit,
+    backProgress: Float = 0f,
+) {
+    var localValue by remember { mutableFloatStateOf(fraction) }
+    var dragging by remember { mutableStateOf(false) }
+    var finishJob by remember { mutableStateOf<Job?>(null) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(show, fraction, dragging) {
+        if (!show) {
+            dragging = false
+        } else if (!dragging) {
+            localValue = fraction
+        }
+    }
+    ReaderGlassSheet(
+        show = show,
+        title = stringResourceCompat(R.string.reader_progress),
+        liquidGlassEnabled = liquidGlassEnabled,
+        backdrop = backdrop,
+        onDismiss = onDismiss,
+        backProgress = backProgress,
+    ) {
+        SliderPreference(
+            value = localValue,
+            onValueChange = { value ->
+                finishJob?.cancel()
+                dragging = true
+                localValue = value
+                onSeek(value)
+            },
+            onValueChangeFinished = {
+                onSeek(localValue)
+                finishJob?.cancel()
+                finishJob = scope.launch {
+                    delay(150)
+                    dragging = false
+                }
+            },
+            valueText = "${(localValue * 100).toInt()}%",
+            valueRange = 0f..1f,
+            showKeyPoints = true,
+            keyPoints = listOf(0f, 0.25f, 0.5f, 0.75f, 1f),
+            hapticEffect = top.yukonga.miuix.kmp.basic.SliderDefaults.SliderHapticEffect.Step,
+        )
+        Spacer(Modifier.height(8.dp))
     }
 }
 

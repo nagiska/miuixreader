@@ -38,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
@@ -81,6 +82,7 @@ import io.github.nagiska.miuixreader.ui.theme.ReaderTheme
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -105,6 +107,7 @@ import org.readium.r2.navigator.preferences.Color as ReadiumColor
 import org.readium.r2.navigator.preferences.FontFamily as ReadiumFontFamily
 import org.readium.r2.navigator.preferences.Theme as ReadiumTheme
 import org.readium.r2.navigator.util.DirectionalNavigationAdapter
+import org.readium.r2.shared.publication.services.locateProgression
 import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.publication.Layout
 import org.readium.r2.shared.publication.Locator
@@ -403,6 +406,7 @@ class ReaderActivity : FragmentActivity() {
                         onImportBackground = { backgroundLauncher.launch(arrayOf("image/*")) },
                         onClearBackground = { clearReaderBackground() },
                         autoHideEnabled = !touchExplorationEnabled,
+                        onSeekProgress = { seekPublication(it) },
                         onVisibilityChanged = { visible ->
                             if (!visible && !chromeState.visible) {
                                 composeView.visibility = View.GONE
@@ -475,6 +479,22 @@ class ReaderActivity : FragmentActivity() {
         lifecycleScope.launch {
             delay(BACKDROP_REFRESH_CAPTURE_DELAY_MILLIS)
             capturePublicationBackdrop(onComplete = { chrome.alpha = 1f })
+        }
+    }
+
+    private var seekJob: Job? = null
+
+    /** Jumps the publication to [fraction] (0..1), throttled while dragging. */
+    private fun seekPublication(fraction: Float) {
+        val pub = publication ?: return
+        val nav = navigator ?: return
+        seekJob?.cancel()
+        seekJob = lifecycleScope.launch {
+            delay(60)
+            val locator = withContext(Dispatchers.Default) {
+                pub.locateProgression(fraction.toDouble().coerceIn(0.0, 1.0))
+            }
+            if (locator != null) nav.go(locator, animated = false)
         }
     }
 
@@ -638,7 +658,10 @@ class ReaderActivity : FragmentActivity() {
         lifecycleScope.launch {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 navigator?.currentLocator?.collectLatest { locator ->
-                    publicationPosition = ReaderPositionLabel(formatPublicationPosition(locator))
+                    publicationPosition = ReaderPositionLabel(
+                        formatPublicationPosition(locator),
+                        fraction = (locator.locations.totalProgression ?: 0.0).toFloat(),
+                    )
                     refreshPublicationBackdrop()
                     (application as ReaderApplication).books.saveProgression(
                         book.id,
@@ -927,19 +950,19 @@ private fun TextReaderScreen(
         },
     )
     val backdrop = rememberLayerBackdrop()
+    val initialProgression = textProgression(
+        chunks = chunks,
+        chunkStartOffsets = chunkStartOffsets,
+        totalCharacterCount = totalCharacterCount,
+        itemIndex = initialItem,
+        offsetFraction = initialPosition.offsetFraction,
+        isAtEnd = false,
+    )
     var progressLabel by remember {
         mutableStateOf(
             ReaderPositionLabel(
-                textProgressLabel(
-                    textProgression(
-                        chunks = chunks,
-                        chunkStartOffsets = chunkStartOffsets,
-                        totalCharacterCount = totalCharacterCount,
-                        itemIndex = initialItem,
-                        offsetFraction = initialPosition.offsetFraction,
-                        isAtEnd = false,
-                    ),
-                ),
+                textProgressLabel(initialProgression),
+                fraction = initialProgression,
             ),
         )
     }
@@ -985,7 +1008,10 @@ private fun TextReaderScreen(
                     offsetFraction = position.offsetFraction,
                     isAtEnd = snapshot.isAtEnd,
                 )
-                progressLabel = ReaderPositionLabel(textProgressLabel(progression))
+                progressLabel = ReaderPositionLabel(
+                    textProgressLabel(progression),
+                    fraction = progression,
+                )
                 delay(750)
                 onProgress(position)
             }
@@ -1004,6 +1030,29 @@ private fun TextReaderScreen(
                     scrollOffset = listState.firstVisibleItemScrollOffset,
                     offsetFraction = offsetFraction.coerceIn(0f, 1f),
                 ),
+            )
+        }
+    }
+    val seekScope = rememberCoroutineScope()
+    var textSeekJob by remember { mutableStateOf<Job?>(null) }
+    val seekTo: (Float) -> Unit = { fraction ->
+        val target = (totalCharacterCount * fraction.coerceIn(0f, 1f)).toInt()
+            .coerceIn(0, totalCharacterCount - 1)
+        val search = chunkStartOffsets.binarySearch(target)
+        val index = (if (search >= 0) search else -search - 2).coerceIn(0, chunks.lastIndex)
+        textSeekJob?.cancel()
+        textSeekJob = seekScope.launch {
+            delay(50)
+            listState.scrollToItem(index, 0)
+            // Wait for the item to lay out, then fine-tune by character ratio.
+            val itemSize = snapshotFlow {
+                listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }?.size ?: 0
+            }.first { it > 0 }
+            val charsInChunk = chunks[index].length.coerceAtLeast(1)
+            val inChunk = (target - chunkStartOffsets[index]).coerceIn(0, charsInChunk - 1)
+            listState.scrollToItem(
+                index,
+                (itemSize * inChunk.toFloat() / charsInChunk).roundToInt(),
             )
         }
     }
@@ -1077,6 +1126,7 @@ private fun TextReaderScreen(
             onImportBackground = onImportBackground,
             onClearBackground = onClearBackground,
             autoHideEnabled = autoHideEnabled,
+            onSeekProgress = seekTo,
         )
     }
 }
