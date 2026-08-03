@@ -92,7 +92,6 @@ import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
-import top.yukonga.miuix.kmp.utils.TiltFeedback
 import top.yukonga.miuix.kmp.utils.pressable
 
 @Composable
@@ -426,7 +425,7 @@ private fun RealtimeGlassCard(
     content: @Composable () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
-    val tiltFeedback = remember { TiltFeedback() }
+    val pressFeedback = remember { ReaderPressFeedback() }
     val glassColor = homeGlassColor()
     val cardShape = RoundedCornerShape(CardDefaults.CornerRadius)
 
@@ -435,17 +434,16 @@ private fun RealtimeGlassCard(
         cornerRadius = CardDefaults.CornerRadius,
         colors = CardDefaults.defaultColors(color = Color.Transparent),
     ) {
-        // The official Miuix TiltFeedback sits outside drawBackdrop so the
-        // whole card — glass layer included — tilts together on press: the
-        // corner under the finger sinks down (rotationX/rotationY with the
-        // transform origin on the opposite corner), same feedback as the
-        // non-glass cards.
+        // Flat press feedback sits outside drawBackdrop so the whole card —
+        // glass layer included — sinks together: it anchors on the exact
+        // press point and shrinks slightly, with no 3D rotation, so the far
+        // corner is never occluded on the glass surface.
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .pressable(
                     interactionSource = interactionSource,
-                    indication = tiltFeedback,
+                    indication = pressFeedback,
                     delay = null,
                 )
                 .drawBackdrop(

@@ -110,12 +110,12 @@ import org.readium.r2.navigator.preferences.FontFamily as ReadiumFontFamily
 import org.readium.r2.navigator.preferences.Theme as ReadiumTheme
 import org.readium.r2.navigator.util.DirectionalNavigationAdapter
 import org.readium.r2.shared.publication.services.locateProgression
+import org.readium.r2.shared.publication.services.positions
 import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.publication.Layout
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Publication
 import org.readium.r2.shared.publication.allAreHtml
-import org.readium.r2.shared.publication.services.positions
 import org.readium.r2.shared.util.AbsoluteUrl
 import org.readium.r2.shared.util.asset.AssetRetriever
 import org.readium.r2.shared.util.http.DefaultHttpClient
@@ -246,8 +246,6 @@ class ReaderActivity : FragmentActivity() {
         val imageListener = object : ImageNavigatorFragment.Listener {}
         val epubPaginationListener = object : EpubNavigatorFragment.PaginationListener {
             override fun onPageChanged(pageIndex: Int, totalPages: Int, locator: Locator) {
-                // Re-pagination (e.g. font size change) changes the page count.
-                publicationPositionCount = totalPages
                 refreshPublicationBackdrop()
                 lifecycleScope.launch { applyEpubPageStyle(latestPreferences) }
             }
@@ -495,12 +493,23 @@ class ReaderActivity : FragmentActivity() {
     private var seekJob: Job? = null
     private var seekingProgression = false
     private var seekingPublication = false
-    private var latestSeekFraction = 0f
-    private var lastSeekFractionConsumed = 0f
+    private var latestSeekPage = 1
+    private var lastSeekPageConsumed = 1
 
-    /** Jumps the publication to [fraction] (0..1), following the finger. */
+    /** Jumps the publication to the page matching [fraction], following the finger. */
     private fun seekPublication(fraction: Float) {
-        latestSeekFraction = fraction
+        val total = publicationPositionCount
+        if (total <= 0) return
+        seekToPage((fraction.coerceIn(0f, 1f) * total).roundToInt().coerceIn(1, total))
+    }
+
+    /**
+     * Jumps to [page] (1-based) using the publication's own positions list, so
+     * the slider page and the rendered page always match exactly. Follows the
+     * finger: each jump runs to completion, then picks up the newest page.
+     */
+    private fun seekToPage(page: Int) {
+        latestSeekPage = page
         if (seekingPublication) return
         seekingPublication = true
         // While the progress slider is being dragged, skip backdrop re-captures
@@ -508,28 +517,37 @@ class ReaderActivity : FragmentActivity() {
         seekingProgression = true
         seekJob = lifecycleScope.launch {
             try {
-                // Serial executor: every go() runs to completion (never
-                // cancelled, which dropped queued jumps while dragging), then
-                // picks up the newest requested fraction and keeps chasing.
                 while (true) {
-                    val target = latestSeekFraction
-                    lastSeekFractionConsumed = target
+                    val target = latestSeekPage
+                    lastSeekPageConsumed = target
                     val pub = publication ?: break
                     val nav = navigator ?: break
-                    val locator = withContext(Dispatchers.Default) {
-                        pub.locateProgression(target.toDouble().coerceIn(0.0, 1.0))
+                    val seekResult = withContext(Dispatchers.Default) {
+                        val positions = pub.positions()
+                        val locator = positions.getOrNull(target - 1) ?: run {
+                            val total = positions.size.coerceAtLeast(1)
+                            pub.locateProgression((target - 1).toDouble() / total)
+                        }
+                        locator to positions.size
                     }
-                    if (locator != null) nav.go(locator, animated = false)
-                    if (target == latestSeekFraction) break
+                    if (seekResult.first != null) {
+                        // Keep the slider's total in sync with the positions list
+                        // (re-pagination after a font change recalculates it).
+                        if (seekResult.second > 0) {
+                            publicationPositionCount = seekResult.second
+                        }
+                        nav.go(seekResult.first, animated = false)
+                    }
+                    if (target == latestSeekPage) break
                 }
             } finally {
                 seekingPublication = false
                 seekingProgression = false
-                if (latestSeekFraction != lastSeekFractionConsumed) {
+                if (latestSeekPage != lastSeekPageConsumed) {
                     // A new request arrived while the executor was finishing
                     // (e.g. a second drag started right after releasing);
                     // restart so it is not dropped.
-                    seekPublication(latestSeekFraction)
+                    seekToPage(latestSeekPage)
                 } else {
                     refreshPublicationBackdrop()
                 }
@@ -826,14 +844,25 @@ class ReaderActivity : FragmentActivity() {
 
     private fun updateFontFamily(fontFamily: ReaderFontFamily) {
         lifecycleScope.launch { readerSettings.setFontFamily(fontFamily) }
+        refreshPositionCount()
     }
 
     private fun updateFontScale(scale: Float) {
         lifecycleScope.launch { readerSettings.setFontScale(scale) }
+        refreshPositionCount()
     }
 
     private fun updateFontWeight(weight: Int) {
         lifecycleScope.launch { readerSettings.setFontWeight(weight) }
+        refreshPositionCount()
+    }
+
+    /** Recomputes the total page count after re-pagination (e.g. font changes). */
+    private fun refreshPositionCount() {
+        lifecycleScope.launch {
+            val size = withContext(Dispatchers.Default) { publication?.positions()?.size ?: 0 }
+            if (size > 0) publicationPositionCount = size
+        }
     }
 
     private fun updateBackgroundMode(mode: ReaderBackgroundMode) {
