@@ -30,7 +30,7 @@ import top.yukonga.miuix.kmp.interfaces.HoldDownInteraction
  * not squash the card's rounded corners into sharp points while pressed.
  */
 @Stable
-class ReaderTiltFeedback(
+data class ReaderTiltFeedback(
     val tiltAmount: Float = 8f,
     val animationSpec: AnimationSpec<Float> = spring(0.6f, 400f),
 ) : IndicationNodeFactory {

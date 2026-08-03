@@ -83,6 +83,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.anim.folmeSpring
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
@@ -161,6 +162,8 @@ enum class ReaderPanel { NONE, TYPOGRAPHY, BACKGROUND, PROGRESS }
 data class ReaderPositionLabel(
     val value: String = "",
     val fraction: Float = 0f,
+    val page: Int = 1,
+    val totalPages: Int = 0,
 )
 
 @Composable
@@ -343,6 +346,8 @@ fun ReaderChrome(
         ReaderProgressSheet(
             show = chrome.panel == ReaderPanel.PROGRESS,
             fraction = progress.fraction,
+            page = progress.page,
+            totalPages = progress.totalPages,
             liquidGlassEnabled = preferences.liquidGlassEnabled,
             backdrop = backdrop,
             onDismiss = chrome::hide,
@@ -865,6 +870,8 @@ private fun ReaderBackgroundSheet(
 private fun ReaderProgressSheet(
     show: Boolean,
     fraction: Float,
+    page: Int,
+    totalPages: Int,
     liquidGlassEnabled: Boolean,
     backdrop: Backdrop,
     colors: Colors,
@@ -872,7 +879,12 @@ private fun ReaderProgressSheet(
     onSeek: (Float) -> Unit,
     backProgress: Float = 0f,
 ) {
+    // Publications seek by page number (one slider step per page); TXT has no
+    // pages and keeps the percentage mode.
+    val usePages = totalPages > 1
+    val initialPage = page.coerceIn(1, totalPages.coerceAtLeast(1))
     var localValue by remember { mutableFloatStateOf(fraction) }
+    var localPage by remember { mutableIntStateOf(initialPage) }
     var dragging by remember { mutableStateOf(false) }
     var finishJob by remember { mutableStateOf<Job?>(null) }
     val scope = rememberCoroutineScope()
@@ -881,6 +893,7 @@ private fun ReaderProgressSheet(
             dragging = false
         } else if (!dragging) {
             localValue = fraction
+            localPage = page.coerceIn(1, totalPages.coerceAtLeast(1))
         }
     }
     ReaderGlassSheet(
@@ -893,25 +906,40 @@ private fun ReaderProgressSheet(
         backProgress = backProgress,
     ) {
         SliderPreference(
-            value = localValue,
+            value = if (usePages) localPage.toFloat() else localValue,
             onValueChange = { value ->
                 finishJob?.cancel()
                 dragging = true
-                localValue = value
-                onSeek(value)
+                if (usePages) {
+                    localPage = value.roundToInt().coerceIn(1, totalPages)
+                    localValue = localPage.toFloat() / totalPages.toFloat()
+                    onSeek(localValue)
+                } else {
+                    localValue = value
+                    onSeek(value)
+                }
             },
             onValueChangeFinished = {
-                onSeek(localValue)
+                onSeek(if (usePages) {
+                    localPage.toFloat() / totalPages.toFloat()
+                } else {
+                    localValue
+                })
                 finishJob?.cancel()
                 finishJob = scope.launch {
                     delay(150)
                     dragging = false
                 }
             },
-            valueText = "${(localValue * 100).toInt()}%",
-            valueRange = 0f..1f,
-            showKeyPoints = true,
-            keyPoints = listOf(0f, 0.25f, 0.5f, 0.75f, 1f),
+            valueText = if (usePages) {
+                "$localPage / $totalPages"
+            } else {
+                "${(localValue * 100).toInt()}%"
+            },
+            valueRange = if (usePages) 1f..totalPages.toFloat() else 0f..1f,
+            steps = if (usePages) (totalPages - 2).coerceAtLeast(0) else 0,
+            showKeyPoints = !usePages,
+            keyPoints = if (usePages) null else listOf(0f, 0.25f, 0.5f, 0.75f, 1f),
             hapticEffect = top.yukonga.miuix.kmp.basic.SliderDefaults.SliderHapticEffect.Step,
         )
         Spacer(Modifier.height(8.dp))

@@ -492,26 +492,45 @@ class ReaderActivity : FragmentActivity() {
 
     private var seekJob: Job? = null
     private var seekingProgression = false
+    private var seekingPublication = false
+    private var latestSeekFraction = 0f
+    private var lastSeekFractionConsumed = 0f
 
-    /** Jumps the publication to [fraction] (0..1), throttled while dragging. */
+    /** Jumps the publication to [fraction] (0..1), following the finger. */
     private fun seekPublication(fraction: Float) {
-        val pub = publication ?: return
-        val nav = navigator ?: return
+        latestSeekFraction = fraction
+        if (seekingPublication) return
+        seekingPublication = true
         // While the progress slider is being dragged, skip backdrop re-captures
         // (they hide the chrome for one frame and make the sheet flicker).
         seekingProgression = true
-        seekJob?.cancel()
         seekJob = lifecycleScope.launch {
             try {
-                delay(60)
-                val locator = withContext(Dispatchers.Default) {
-                    pub.locateProgression(fraction.toDouble().coerceIn(0.0, 1.0))
+                // Serial executor: every go() runs to completion (never
+                // cancelled, which dropped queued jumps while dragging), then
+                // picks up the newest requested fraction and keeps chasing.
+                while (true) {
+                    val target = latestSeekFraction
+                    lastSeekFractionConsumed = target
+                    val pub = publication ?: break
+                    val nav = navigator ?: break
+                    val locator = withContext(Dispatchers.Default) {
+                        pub.locateProgression(target.toDouble().coerceIn(0.0, 1.0))
+                    }
+                    if (locator != null) nav.go(locator, animated = false)
+                    if (target == latestSeekFraction) break
                 }
-                if (locator != null) nav.go(locator, animated = false)
             } finally {
-                delay(400)
+                seekingPublication = false
                 seekingProgression = false
-                refreshPublicationBackdrop()
+                if (latestSeekFraction != lastSeekFractionConsumed) {
+                    // A new request arrived while the executor was finishing
+                    // (e.g. a second drag started right after releasing);
+                    // restart so it is not dropped.
+                    seekPublication(latestSeekFraction)
+                } else {
+                    refreshPublicationBackdrop()
+                }
             }
         }
     }
@@ -676,9 +695,16 @@ class ReaderActivity : FragmentActivity() {
         lifecycleScope.launch {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 navigator?.currentLocator?.collectLatest { locator ->
+                    val total = publicationPositionCount
+                    val position = locator.locations.position
+                        ?: locator.locations.totalProgression?.let { progression ->
+                            if (total > 0) (progression * total).toInt().coerceIn(0, total - 1) + 1 else null
+                        }
                     publicationPosition = ReaderPositionLabel(
                         formatPublicationPosition(locator),
                         fraction = (locator.locations.totalProgression ?: 0.0).toFloat(),
+                        page = position ?: 1,
+                        totalPages = total,
                     )
                     refreshPublicationBackdrop()
                     (application as ReaderApplication).books.saveProgression(
