@@ -38,7 +38,7 @@ import top.yukonga.miuix.kmp.interfaces.HoldDownInteraction
  */
 @Stable
 data class ReaderTiltFeedback(
-    val tiltAmount: Float = 6f,
+    val tiltAmount: Float = 10f,
     val animationSpec: AnimationSpec<Float> = spring(0.8f, 600f),
 ) : IndicationNodeFactory {
     override fun create(interactionSource: InteractionSource): DelegatableNode =
