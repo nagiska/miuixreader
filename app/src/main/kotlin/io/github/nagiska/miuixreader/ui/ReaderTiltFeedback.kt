@@ -23,8 +23,6 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntSize
 import kotlin.math.asin
 import kotlin.math.sin
-import kotlin.math.toDegrees
-import kotlin.math.toRadians
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.interfaces.HoldDownInteraction
 
@@ -103,9 +101,12 @@ data class ReaderTiltFeedback(
                 // and looks like it disappears.
                 val tiltX = tiltAmount
                 val tiltY = if (bounds.width > 0) {
-                    toDegrees(
+                    // java.lang.Math is used for the degree/radian conversion:
+                    // kotlin.math.toDegrees/toRadians are unavailable in this
+                    // Kotlin version.
+                    java.lang.Math.toDegrees(
                         asin(
-                            (sin(toRadians(tiltAmount.toDouble())) *
+                            (sin(java.lang.Math.toRadians(tiltAmount.toDouble())) *
                                 bounds.height / bounds.width).coerceIn(-1.0, 1.0),
                         ),
                     ).toFloat()
