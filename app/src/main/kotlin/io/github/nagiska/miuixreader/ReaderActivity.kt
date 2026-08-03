@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -89,6 +90,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import org.readium.adapter.pdfium.document.PdfiumDocumentFactory
 import org.readium.adapter.pdfium.navigator.PdfiumEngineProvider
@@ -468,7 +470,13 @@ class ReaderActivity : FragmentActivity() {
      * captured window does not include the bars or sheets themselves.
      */
     private fun refreshPublicationBackdrop() {
-        if (!chromeState.visible || capturePending || isDestroyed || !latestPreferences.liquidGlassEnabled) {
+        if (
+            seekingProgression ||
+            !chromeState.visible ||
+            capturePending ||
+            isDestroyed ||
+            !latestPreferences.liquidGlassEnabled
+        ) {
             return
         }
         val now = SystemClock.uptimeMillis()
@@ -483,18 +491,28 @@ class ReaderActivity : FragmentActivity() {
     }
 
     private var seekJob: Job? = null
+    private var seekingProgression = false
 
     /** Jumps the publication to [fraction] (0..1), throttled while dragging. */
     private fun seekPublication(fraction: Float) {
         val pub = publication ?: return
         val nav = navigator ?: return
+        // While the progress slider is being dragged, skip backdrop re-captures
+        // (they hide the chrome for one frame and make the sheet flicker).
+        seekingProgression = true
         seekJob?.cancel()
         seekJob = lifecycleScope.launch {
-            delay(60)
-            val locator = withContext(Dispatchers.Default) {
-                pub.locateProgression(fraction.toDouble().coerceIn(0.0, 1.0))
+            try {
+                delay(60)
+                val locator = withContext(Dispatchers.Default) {
+                    pub.locateProgression(fraction.toDouble().coerceIn(0.0, 1.0))
+                }
+                if (locator != null) nav.go(locator, animated = false)
+            } finally {
+                delay(400)
+                seekingProgression = false
+                refreshPublicationBackdrop()
             }
-            if (locator != null) nav.go(locator, animated = false)
         }
     }
 
@@ -1034,26 +1052,45 @@ private fun TextReaderScreen(
         }
     }
     val seekScope = rememberCoroutineScope()
-    var textSeekJob by remember { mutableStateOf<Job?>(null) }
+    var latestSeekFraction by remember { mutableFloatStateOf(0f) }
+    var seekingText by remember { mutableStateOf(false) }
     val seekTo: (Float) -> Unit = { fraction ->
-        val target = (totalCharacterCount * fraction.coerceIn(0f, 1f)).toInt()
-            .coerceIn(0, totalCharacterCount - 1)
-        val search = chunkStartOffsets.binarySearch(target)
-        val index = (if (search >= 0) search else -search - 2).coerceIn(0, chunks.lastIndex)
-        textSeekJob?.cancel()
-        textSeekJob = seekScope.launch {
-            delay(50)
-            listState.scrollToItem(index, 0)
-            // Wait for the item to lay out, then fine-tune by character ratio.
-            val itemSize = snapshotFlow {
-                listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }?.size ?: 0
-            }.first { it > 0 }
-            val charsInChunk = chunks[index].length.coerceAtLeast(1)
-            val inChunk = (target - chunkStartOffsets[index]).coerceIn(0, charsInChunk - 1)
-            listState.scrollToItem(
-                index,
-                (itemSize * inChunk.toFloat() / charsInChunk).roundToInt(),
-            )
+        latestSeekFraction = fraction
+        if (!seekingText) {
+            seekingText = true
+            seekScope.launch {
+                try {
+                    // Serial executor: each scroll runs to completion (never
+                    // cancelled mid-way, which left the list stuck mid-item and
+                    // made the page flicker); after each jump it picks up the
+                    // newest requested fraction and keeps chasing the finger.
+                    while (true) {
+                        val targetFraction = latestSeekFraction
+                        val target = (totalCharacterCount * targetFraction.coerceIn(0f, 1f)).toInt()
+                            .coerceIn(0, totalCharacterCount - 1)
+                        val search = chunkStartOffsets.binarySearch(target)
+                        val index = (if (search >= 0) search else -search - 2).coerceIn(0, chunks.lastIndex)
+                        listState.scrollToItem(index, 0)
+                        // Wait for the item to lay out, then fine-tune by
+                        // character ratio (with a timeout so a zero-size
+                        // layout frame cannot stall the seeker forever).
+                        val itemSize = withTimeoutOrNull(500) {
+                            snapshotFlow {
+                                listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }?.size ?: 0
+                            }.first { it > 0 }
+                        } ?: 0
+                        val charsInChunk = chunks[index].length.coerceAtLeast(1)
+                        val inChunk = (target - chunkStartOffsets[index]).coerceIn(0, charsInChunk - 1)
+                        listState.scrollToItem(
+                            index,
+                            (itemSize * inChunk.toFloat() / charsInChunk).roundToInt(),
+                        )
+                        if (targetFraction == latestSeekFraction) break
+                    }
+                } finally {
+                    seekingText = false
+                }
+            }
         }
     }
     Box(Modifier.fillMaxSize()) {
