@@ -366,7 +366,10 @@ private fun GlassCircleButton(
                 .drawBackdrop(
                     backdrop = backdrop,
                     shape = { RoundedCornerShape(50) },
-                    effects = { blur(14.dp.toPx()) },
+                    effects = {
+                        vibrancy()
+                        blur(14.dp.toPx())
+                    },
                     onDrawSurface = { drawRect(glassColor) },
                 ),
             contentAlignment = Alignment.Center,

@@ -472,9 +472,10 @@ class ReaderActivity : FragmentActivity() {
         lastBackdropRefreshAt = now
         val chrome = chromeView ?: return
         chrome.alpha = 0f
-        Handler(Looper.getMainLooper()).postDelayed({
+        lifecycleScope.launch {
+            delay(BACKDROP_REFRESH_CAPTURE_DELAY_MILLIS)
             capturePublicationBackdrop(onComplete = { chrome.alpha = 1f })
-        }, BACKDROP_REFRESH_CAPTURE_DELAY_MILLIS)
+        }
     }
 
     private fun capturePublicationBackdrop(onComplete: (() -> Unit)? = null) {
@@ -494,7 +495,7 @@ class ReaderActivity : FragmentActivity() {
         val captureHeight = maxOf(1, (height * captureScale).toInt())
         val index = captureIndex
         var bitmap = captureBitmaps[index]
-        if (bitmap == null || bitmap.width != captureWidth || bitmap.height != captureHeight) {
+        if (bitmap == null || bitmap.isRecycled || bitmap.width != captureWidth || bitmap.height != captureHeight) {
             bitmap = try {
                 Bitmap.createBitmap(captureWidth, captureHeight, Bitmap.Config.ARGB_8888)
             } catch (_: Throwable) {
@@ -514,7 +515,16 @@ class ReaderActivity : FragmentActivity() {
                 if (isDestroyed) return@OnPixelCopyFinishedListener
                 if (result == PixelCopy.SUCCESS) {
                     captureIndex = (index + 1) % captureBitmaps.size
-                    publicationBackdrop.setBitmap(bitmap, width, height)
+                    val recycled = publicationBackdrop.setBitmap(bitmap, width, height)
+                    if (recycled != null) {
+                        // The backdrop recycled the previous buffer; drop any
+                        // capture-pool slot that still references it so the
+                        // next capture allocates a fresh bitmap instead of
+                        // handing a recycled one to PixelCopy.
+                        for (i in captureBitmaps.indices) {
+                            if (captureBitmaps[i] === recycled) captureBitmaps[i] = null
+                        }
+                    }
                 } else {
                     publicationBackdrop.clear()
                 }

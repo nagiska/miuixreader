@@ -36,7 +36,14 @@ class ReaderBackdrop : Backdrop {
 
     override val isCoordinatesDependent: Boolean = true
 
-    fun setBitmap(next: Bitmap?, destinationWidth: Int = 0, destinationHeight: Int = 0) {
+    /**
+     * Replaces the snapshot and recycles the previous one.
+     *
+     * Returns the bitmap that was recycled (or null) so callers that keep
+     * their own references to the previous bitmap (e.g. a capture buffer
+     * pool) can drop them and never reuse a recycled bitmap.
+     */
+    fun setBitmap(next: Bitmap?, destinationWidth: Int = 0, destinationHeight: Int = 0): Bitmap? {
         val previous = bitmap
         bitmap = next
         image = next?.asImageBitmap()
@@ -47,7 +54,9 @@ class ReaderBackdrop : Backdrop {
         }
         if (previous != null && previous !== next && !previous.isRecycled) {
             previous.recycle()
+            return previous
         }
+        return null
     }
 
     fun clear() {
