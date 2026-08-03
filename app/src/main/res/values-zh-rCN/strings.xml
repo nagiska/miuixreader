@@ -50,7 +50,6 @@
     <string name="import_background">导入图片</string>
     <string name="use_imported_background">使用已导入的背景</string>
     <string name="reader_page_count">第 %1$d / %2$d 页</string>
-    <string name="reader_position_count">位置 %1$d / %2$d · %3$d%%</string>
     <string name="reader_progress_percent">%1$d%%</string>
     <string name="reader_progress">阅读进度</string>
     <string name="delete">删除</string>

@@ -813,18 +813,9 @@ class ReaderActivity : FragmentActivity() {
             }
         val percent = ((locator.locations.totalProgression ?: 0.0) * 100).toInt().coerceIn(0, 100)
         return when (publicationReader) {
-            PublicationReader.PDF, PublicationReader.IMAGE -> {
+            PublicationReader.PDF, PublicationReader.IMAGE, PublicationReader.EPUB -> {
                 if (position != null && total > 0) {
                     getString(R.string.reader_page_count, position, total)
-                } else {
-                    getString(R.string.reader_progress_percent, percent)
-                }
-            }
-            PublicationReader.EPUB -> {
-                if (publication?.metadata?.layout == Layout.FIXED && position != null && total > 0) {
-                    getString(R.string.reader_page_count, position, total)
-                } else if (position != null && total > 0) {
-                    getString(R.string.reader_position_count, position, total, percent)
                 } else {
                     getString(R.string.reader_progress_percent, percent)
                 }
