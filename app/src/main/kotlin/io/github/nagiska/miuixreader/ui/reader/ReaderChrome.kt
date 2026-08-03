@@ -96,6 +96,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 import org.readium.r2.shared.publication.Link
+import org.readium.r2.shared.publication.Locator
 import top.yukonga.miuix.kmp.anim.folmeSpring
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
@@ -1116,7 +1117,7 @@ private fun ReaderTocSheet(
                         .fillMaxWidth()
                         .clickable { onTocClick(entry.link) }
                         .padding(
-                            start = 16.dp + entry.depth * 16.dp,
+                            start = 16.dp + 16.dp * entry.depth,
                             end = 16.dp,
                             top = 12.dp,
                             bottom = 12.dp,
@@ -1366,7 +1367,7 @@ private fun readerGlassColor(): Color =
 private const val CHROME_EXIT_MILLIS = 450L
 
 /** A search hit: a publication [locator] (EPUB) or a TXT [itemIndex]/[scrollOffset]. */
-internal data class ReaderSearchResult(
+data class ReaderSearchResult(
     val title: String,
     val snippet: String,
     val locator: Locator? = null,

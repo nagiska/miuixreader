@@ -548,7 +548,7 @@ class ReaderActivity : FragmentActivity() {
     }
 
     private fun handleSearchResultClick(result: ReaderSearchResult) {
-        if (result.locator != null) navigator?.go(result.locator)
+        result.locator?.let { navigator?.go(it) }
         chromeState.closePanel()
     }
 
