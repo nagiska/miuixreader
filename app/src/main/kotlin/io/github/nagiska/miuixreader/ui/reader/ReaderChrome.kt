@@ -9,9 +9,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
@@ -25,12 +27,15 @@ import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -45,6 +50,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,7 +59,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -64,6 +73,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
@@ -72,6 +82,7 @@ import com.kyant.backdrop.drawBackdrop
 import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.vibrancy
 import io.github.nagiska.miuixreader.R
+import io.github.nagiska.miuixreader.data.BookmarkEntity
 import io.github.nagiska.miuixreader.data.MIN_FONT_SCALE
 import io.github.nagiska.miuixreader.data.MAX_FONT_SCALE
 import io.github.nagiska.miuixreader.data.ReaderBackgroundMode
@@ -84,6 +95,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import org.readium.r2.shared.publication.Link
 import top.yukonga.miuix.kmp.anim.folmeSpring
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
@@ -95,11 +107,16 @@ import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Background
 import top.yukonga.miuix.kmp.icon.extended.Delete
+import top.yukonga.miuix.kmp.icon.extended.Favorites
 import top.yukonga.miuix.kmp.icon.extended.Image
+import top.yukonga.miuix.kmp.icon.extended.ListView
+import top.yukonga.miuix.kmp.icon.extended.Pin
+import top.yukonga.miuix.kmp.icon.extended.Search
 import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.theme.Colors
 import top.yukonga.miuix.kmp.theme.LocalContentColor
@@ -157,7 +174,7 @@ class ReaderChromeState {
     }
 }
 
-enum class ReaderPanel { NONE, TYPOGRAPHY, BACKGROUND, PROGRESS }
+enum class ReaderPanel { NONE, TYPOGRAPHY, BACKGROUND, PROGRESS, TABLE_OF_CONTENTS, SEARCH, BOOKMARKS }
 
 data class ReaderPositionLabel(
     val value: String = "",
@@ -187,7 +204,20 @@ fun ReaderChrome(
     onClearBackground: () -> Unit,
     autoHideEnabled: Boolean = true,
     onVisibilityChanged: (Boolean) -> Unit = {},
-    onSeekProgress: (Float) -> Unit = {},
+    onSeekPage: (Int) -> Unit = {},
+    onSeekFraction: (Float) -> Unit = {},
+    tableOfContents: List<Link> = emptyList(),
+    onTocClick: (Link) -> Unit = {},
+    searchResults: List<ReaderSearchResult> = emptyList(),
+    searching: Boolean = false,
+    onSearchQuery: (String) -> Unit = {},
+    onSearchResultClick: (ReaderSearchResult) -> Unit = {},
+    bookmarks: List<BookmarkEntity> = emptyList(),
+    bookmarked: Boolean = false,
+    onToggleBookmark: () -> Unit = {},
+    onBookmarkClick: (BookmarkEntity) -> Unit = {},
+    onBookmarkDelete: (BookmarkEntity) -> Unit = {},
+    searchAvailable: Boolean = true,
 ) {
     chrome.AutoHide(enabled = autoHideEnabled)
     LaunchedEffect(chrome.visible) {
@@ -297,6 +327,10 @@ fun ReaderChrome(
                 onBack = onBack,
                 onTypography = { chrome.open(ReaderPanel.TYPOGRAPHY) },
                 onBackground = { chrome.open(ReaderPanel.BACKGROUND) },
+                onToc = { chrome.open(ReaderPanel.TABLE_OF_CONTENTS) },
+                tocAvailable = tableOfContents.isNotEmpty(),
+                onSearch = { chrome.open(ReaderPanel.SEARCH) },
+                searchAvailable = searchAvailable,
                 colors = chromeColors,
                 backProgress = chromeBackProgress,
                 modifier = Modifier.onGloballyPositioned {
@@ -309,6 +343,9 @@ fun ReaderChrome(
                 backdrop = backdrop,
                 liquidGlassEnabled = preferences.liquidGlassEnabled,
                 onClick = { chrome.open(ReaderPanel.PROGRESS) },
+                onOpenBookmarks = { chrome.open(ReaderPanel.BOOKMARKS) },
+                onToggleBookmark = onToggleBookmark,
+                bookmarked = bookmarked,
                 colors = chromeColors,
                 backProgress = chromeBackProgress,
                 modifier = Modifier.onGloballyPositioned {
@@ -320,7 +357,7 @@ fun ReaderChrome(
             show = chrome.panel == ReaderPanel.TYPOGRAPHY,
             preferences = preferences,
             backdrop = backdrop,
-            onDismiss = chrome::hide,
+            onDismiss = chrome::closePanel,
             colors = chromeColors,
             backProgress = sheetBackProgress,
             onFontFamilyChange = onFontFamilyChange,
@@ -335,7 +372,7 @@ fun ReaderChrome(
             imageScrim = readerImageScrim,
             colors = chromeColors,
             readerBackground = readerBackground,
-            onDismiss = chrome::hide,
+            onDismiss = chrome::closePanel,
             backProgress = sheetBackProgress,
             onFollowTheme = onBackgroundFollowTheme,
             onColorChange = onBackgroundColorChange,
@@ -350,9 +387,43 @@ fun ReaderChrome(
             totalPages = progress.totalPages,
             liquidGlassEnabled = preferences.liquidGlassEnabled,
             backdrop = backdrop,
-            onDismiss = chrome::hide,
+            onDismiss = chrome::closePanel,
             colors = chromeColors,
-            onSeek = onSeekProgress,
+            onSeekPage = onSeekPage,
+            onSeekFraction = onSeekFraction,
+            backProgress = sheetBackProgress,
+        )
+        ReaderTocSheet(
+            show = chrome.panel == ReaderPanel.TABLE_OF_CONTENTS,
+            toc = tableOfContents,
+            liquidGlassEnabled = preferences.liquidGlassEnabled,
+            backdrop = backdrop,
+            onDismiss = chrome::closePanel,
+            colors = chromeColors,
+            onTocClick = onTocClick,
+            backProgress = sheetBackProgress,
+        )
+        ReaderSearchSheet(
+            show = chrome.panel == ReaderPanel.SEARCH,
+            results = searchResults,
+            searching = searching,
+            liquidGlassEnabled = preferences.liquidGlassEnabled,
+            backdrop = backdrop,
+            onDismiss = chrome::closePanel,
+            colors = chromeColors,
+            onQueryChange = onSearchQuery,
+            onResultClick = onSearchResultClick,
+            backProgress = sheetBackProgress,
+        )
+        ReaderBookmarkSheet(
+            show = chrome.panel == ReaderPanel.BOOKMARKS,
+            bookmarks = bookmarks,
+            liquidGlassEnabled = preferences.liquidGlassEnabled,
+            backdrop = backdrop,
+            onDismiss = chrome::closePanel,
+            colors = chromeColors,
+            onBookmarkClick = onBookmarkClick,
+            onBookmarkDelete = onBookmarkDelete,
             backProgress = sheetBackProgress,
         )
     }
@@ -368,6 +439,10 @@ private fun ReaderTopBar(
     onBack: () -> Unit,
     onTypography: () -> Unit,
     onBackground: () -> Unit,
+    onToc: () -> Unit,
+    tocAvailable: Boolean,
+    onSearch: () -> Unit,
+    searchAvailable: Boolean,
     colors: Colors,
     backProgress: Float = 0f,
     modifier: Modifier = Modifier,
@@ -409,6 +484,32 @@ private fun ReaderTopBar(
                             }
                         },
                         actions = {
+                            if (tocAvailable) {
+                                GlassCircleButton(
+                                    enabled = preferences.liquidGlassEnabled,
+                                    backdrop = backdrop,
+                                ) {
+                                    IconButton(onClick = onToc) {
+                                        Icon(
+                                            MiuixIcons.ListView,
+                                            contentDescription = stringResourceCompat(R.string.table_of_contents),
+                                        )
+                                    }
+                                }
+                            }
+                            if (searchAvailable) {
+                                GlassCircleButton(
+                                    enabled = preferences.liquidGlassEnabled,
+                                    backdrop = backdrop,
+                                ) {
+                                    IconButton(onClick = onSearch) {
+                                        Icon(
+                                            MiuixIcons.Search,
+                                            contentDescription = stringResourceCompat(R.string.search_in_book),
+                                        )
+                                    }
+                                }
+                            }
                             if (supportsTypography) {
                                 GlassCircleButton(
                                     enabled = preferences.liquidGlassEnabled,
@@ -485,6 +586,9 @@ private fun ReaderBottomBar(
     liquidGlassEnabled: Boolean,
     colors: Colors,
     onClick: (() -> Unit)? = null,
+    onOpenBookmarks: () -> Unit = {},
+    onToggleBookmark: () -> Unit = {},
+    bookmarked: Boolean = false,
     backProgress: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
@@ -524,12 +628,32 @@ private fun ReaderBottomBar(
                         },
                         cornerRadius = CardDefaults.CornerRadius,
                     ) {
-                        Text(
-                            text = label,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
-                            style = MiuixTheme.textStyles.body2,
-                            textAlign = TextAlign.Center,
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            IconButton(onClick = onOpenBookmarks) {
+                                Icon(
+                                    MiuixIcons.Favorites,
+                                    contentDescription = stringResourceCompat(R.string.bookmarks),
+                                )
+                            }
+                            Text(
+                                text = label,
+                                modifier = Modifier.weight(1f).padding(horizontal = 4.dp, vertical = 8.dp),
+                                style = MiuixTheme.textStyles.body2,
+                                textAlign = TextAlign.Center,
+                            )
+                            IconButton(onClick = onToggleBookmark) {
+                                Icon(
+                                    MiuixIcons.Pin,
+                                    contentDescription = stringResourceCompat(R.string.bookmark_current_page),
+                                    modifier = Modifier.semantics {
+                                        selected = bookmarked
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -577,8 +701,28 @@ private fun ReaderGlassSheet(
                                     requireUnconsumed = false,
                                     pass = PointerEventPass.Initial,
                                 )
-                                val up = waitForUpOrCancellation(pass = PointerEventPass.Final)
-                                if (up == null) return@awaitEachGesture
+                                val slop = viewConfiguration.touchSlop
+                                var moved = 0f
+                                var isTap = true
+                                var up: PointerInputChange? = null
+                                while (true) {
+                                    val event = awaitPointerEvent(pass = PointerEventPass.Final)
+                                    val change = event.changes.firstOrNull { it.id == down.id }
+                                        ?: break
+                                    if (change.changedToUp()) {
+                                        up = change
+                                        break
+                                    }
+                                    if (!change.isConsumed) {
+                                        moved += change.positionChange().getDistance()
+                                        if (moved > slop) {
+                                            // A drag, not a tap: do not dismiss.
+                                            isTap = false
+                                            break
+                                        }
+                                    }
+                                }
+                                if (!isTap || up == null) return@awaitEachGesture
                                 val aboveSheet = down.position.y < size.height - sheetHeight
                                 if (aboveSheet) {
                                     onDismiss()
@@ -876,7 +1020,8 @@ private fun ReaderProgressSheet(
     backdrop: Backdrop,
     colors: Colors,
     onDismiss: () -> Unit,
-    onSeek: (Float) -> Unit,
+    onSeekPage: (Int) -> Unit,
+    onSeekFraction: (Float) -> Unit,
     backProgress: Float = 0f,
 ) {
     // Publications seek by page number (one slider step per page); TXT has no
@@ -912,19 +1057,14 @@ private fun ReaderProgressSheet(
                 dragging = true
                 if (usePages) {
                     localPage = value.roundToInt().coerceIn(1, totalPages)
-                    localValue = localPage.toFloat() / totalPages.toFloat()
-                    onSeek(localValue)
+                    onSeekPage(localPage)
                 } else {
                     localValue = value
-                    onSeek(value)
+                    onSeekFraction(value)
                 }
             },
             onValueChangeFinished = {
-                onSeek(if (usePages) {
-                    localPage.toFloat() / totalPages.toFloat()
-                } else {
-                    localValue
-                })
+                if (usePages) onSeekPage(localPage) else onSeekFraction(localValue)
                 finishJob?.cancel()
                 finishJob = scope.launch {
                     delay(150)
@@ -942,6 +1082,218 @@ private fun ReaderProgressSheet(
             keyPoints = if (usePages) null else listOf(0f, 0.25f, 0.5f, 0.75f, 1f),
             hapticEffect = top.yukonga.miuix.kmp.basic.SliderDefaults.SliderHapticEffect.Step,
         )
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun ReaderTocSheet(
+    show: Boolean,
+    toc: List<Link>,
+    liquidGlassEnabled: Boolean,
+    backdrop: Backdrop,
+    colors: Colors,
+    onDismiss: () -> Unit,
+    onTocClick: (Link) -> Unit,
+    backProgress: Float = 0f,
+) {
+    val entries = remember(toc) { flattenToc(toc) }
+    ReaderGlassSheet(
+        show = show,
+        title = stringResourceCompat(R.string.table_of_contents),
+        liquidGlassEnabled = liquidGlassEnabled,
+        backdrop = backdrop,
+        colors = colors,
+        onDismiss = onDismiss,
+        backProgress = backProgress,
+    ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp),
+        ) {
+            items(entries) { entry ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onTocClick(entry.link) }
+                        .padding(
+                            start = 16.dp + entry.depth * 16.dp,
+                            end = 16.dp,
+                            top = 12.dp,
+                            bottom = 12.dp,
+                        ),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = entry.link.title ?: entry.link.href.toString(),
+                        style = MiuixTheme.textStyles.body1,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun ReaderSearchSheet(
+    show: Boolean,
+    results: List<ReaderSearchResult>,
+    searching: Boolean,
+    liquidGlassEnabled: Boolean,
+    backdrop: Backdrop,
+    colors: Colors,
+    onDismiss: () -> Unit,
+    onQueryChange: (String) -> Unit,
+    onResultClick: (ReaderSearchResult) -> Unit,
+    backProgress: Float = 0f,
+) {
+    val state = remember { TextFieldState() }
+    var query by remember { mutableStateOf("") }
+    LaunchedEffect(show) {
+        if (!show) {
+            query = ""
+            state.edit { replace(0, length, "") }
+        }
+    }
+    LaunchedEffect(state) {
+        snapshotFlow { state.text.toString() }.collect { query = it }
+    }
+    // Debounced, cancellable query emission (empty query clears the results).
+    LaunchedEffect(query) {
+        delay(300)
+        onQueryChange(query.trim())
+    }
+    ReaderGlassSheet(
+        show = show,
+        title = stringResourceCompat(R.string.search_in_book),
+        liquidGlassEnabled = liquidGlassEnabled,
+        backdrop = backdrop,
+        colors = colors,
+        onDismiss = onDismiss,
+        backProgress = backProgress,
+    ) {
+        TextField(
+            state = state,
+            modifier = Modifier.fillMaxWidth(),
+            label = stringResourceCompat(R.string.search_hint_in_book),
+        )
+        Spacer(Modifier.height(8.dp))
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
+        ) {
+            if (searching) {
+                item {
+                    Text(
+                        text = stringResourceCompat(R.string.searching),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                        style = MiuixTheme.textStyles.body2,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            } else if (results.isEmpty() && query.isNotBlank()) {
+                item {
+                    Text(
+                        text = stringResourceCompat(R.string.no_results),
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                        style = MiuixTheme.textStyles.body2,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            } else {
+                items(results) { result ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onResultClick(result) }
+                            .padding(vertical = 10.dp),
+                    ) {
+                        Text(
+                            text = result.title.ifBlank { stringResourceCompat(R.string.search_result) },
+                            style = MiuixTheme.textStyles.body1,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = result.snippet,
+                            style = MiuixTheme.textStyles.body2,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun ReaderBookmarkSheet(
+    show: Boolean,
+    bookmarks: List<BookmarkEntity>,
+    liquidGlassEnabled: Boolean,
+    backdrop: Backdrop,
+    colors: Colors,
+    onDismiss: () -> Unit,
+    onBookmarkClick: (BookmarkEntity) -> Unit,
+    onBookmarkDelete: (BookmarkEntity) -> Unit,
+    backProgress: Float = 0f,
+) {
+    val dateFormat = remember { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()) }
+    ReaderGlassSheet(
+        show = show,
+        title = stringResourceCompat(R.string.bookmarks),
+        liquidGlassEnabled = liquidGlassEnabled,
+        backdrop = backdrop,
+        colors = colors,
+        onDismiss = onDismiss,
+        backProgress = backProgress,
+    ) {
+        if (bookmarks.isEmpty()) {
+            Text(
+                text = stringResourceCompat(R.string.no_bookmarks),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                style = MiuixTheme.textStyles.body2,
+                textAlign = TextAlign.Center,
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
+            ) {
+                items(bookmarks) { bookmark ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onBookmarkClick(bookmark) }
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = bookmark.excerpt.ifBlank {
+                                    stringResourceCompat(R.string.bookmark)
+                                },
+                                style = MiuixTheme.textStyles.body1,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = dateFormat.format(java.util.Date(bookmark.createdAt)),
+                                style = MiuixTheme.textStyles.body2,
+                            )
+                        }
+                        IconButton(onClick = { onBookmarkDelete(bookmark) }) {
+                            Icon(
+                                MiuixIcons.Delete,
+                                contentDescription = stringResourceCompat(R.string.delete),
+                            )
+                        }
+                    }
+                }
+            }
+        }
         Spacer(Modifier.height(8.dp))
     }
 }
@@ -1012,3 +1364,31 @@ private fun readerGlassColor(): Color =
     Color.White.copy(alpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.08f else 0.18f)
 
 private const val CHROME_EXIT_MILLIS = 450L
+
+/** A search hit: a publication [locator] (EPUB) or a TXT [itemIndex]/[scrollOffset]. */
+internal data class ReaderSearchResult(
+    val title: String,
+    val snippet: String,
+    val locator: Locator? = null,
+    val itemIndex: Int = -1,
+    val scrollOffset: Int = 0,
+    /** TXT: absolute character offset of the hit, for fine positioning. */
+    val hitChar: Int = -1,
+)
+
+/** A table-of-contents entry flattened with its nesting [depth] (0 = top level). */
+internal data class TocEntry(val link: Link, val depth: Int)
+
+/** Maps a 1-based [page] to a 0..1 total progression across [total] pages. */
+internal fun pageToProgression(page: Int, total: Int): Double =
+    if (total > 1) {
+        (page - 1).coerceIn(0, total - 1).toDouble() / (total - 1)
+    } else {
+        0.0
+    }
+
+/** Flattens a [Link] tree (children recursive) into an ordered, depth-tagged list. */
+internal fun flattenToc(links: List<Link>, depth: Int = 0): List<TocEntry> =
+    links.flatMap { link ->
+        listOf(TocEntry(link, depth)) + flattenToc(link.children, depth + 1)
+    }

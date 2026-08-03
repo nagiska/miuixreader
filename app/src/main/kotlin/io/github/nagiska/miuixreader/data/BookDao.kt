@@ -25,4 +25,7 @@ interface BookDao {
 
     @Query("DELETE FROM books WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    @Query("UPDATE books SET title = :title, author = :author WHERE id = :id")
+    suspend fun updateMetadata(id: Long, title: String, author: String)
 }

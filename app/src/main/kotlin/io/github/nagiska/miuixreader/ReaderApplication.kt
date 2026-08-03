@@ -7,6 +7,8 @@ import io.github.nagiska.miuixreader.data.ReaderSettings
 
 class ReaderApplication : Application() {
     val database: BookDatabase by lazy { BookDatabase.create(this) }
-    val books: BookRepository by lazy { BookRepository(this, database.bookDao()) }
+    val books: BookRepository by lazy {
+        BookRepository(this, database.bookDao(), database.bookmarkDao())
+    }
     val settings: ReaderSettings by lazy { ReaderSettings(this) }
 }

@@ -1,7 +1,11 @@
 package io.github.nagiska.miuixreader.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitPointerEvent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +29,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,9 +46,16 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.changedToUp
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -83,6 +95,7 @@ import top.yukonga.miuix.kmp.icon.extended.Add
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.icon.extended.Delete
+import top.yukonga.miuix.kmp.icon.extended.Edit
 import top.yukonga.miuix.kmp.icon.extended.File
 import top.yukonga.miuix.kmp.icon.extended.Image
 import top.yukonga.miuix.kmp.icon.extended.Search
@@ -98,11 +111,13 @@ fun ReaderApp(
     onOpen: (BookEntity) -> Unit,
     onImportBookshelfBackground: () -> Unit,
     onImportReaderBackground: () -> Unit,
+    onEditBook: (BookEntity, String, String) -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var settingsVisible by rememberSaveable { mutableStateOf(false) }
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<BookEntity?>(null) }
+    var pendingEdit by remember { mutableStateOf<BookEntity?>(null) }
 
     LaunchedEffect(state.message) {
         if (state.message != null) {
@@ -152,6 +167,7 @@ fun ReaderApp(
                         onImport = onImport,
                         onOpen = onOpen,
                         onDelete = { pendingDelete = it },
+                        onEdit = { pendingEdit = it },
                         onSettings = { settingsVisible = true },
                     )
                 }
@@ -178,6 +194,18 @@ fun ReaderApp(
                             )
                         }
                     }
+                }
+                pendingEdit?.let { book ->
+                    BookshelfGlassSheet(
+                        show = true,
+                        book = book,
+                        backdrop = homeBackdrop,
+                        onDismiss = { pendingEdit = null },
+                        onSave = { title, author ->
+                            onEditBook(book, title, author)
+                            pendingEdit = null
+                        },
+                    )
                 }
             }
         }
@@ -221,6 +249,7 @@ private fun BookshelfScreen(
     onImport: () -> Unit,
     onOpen: (BookEntity) -> Unit,
     onDelete: (BookEntity) -> Unit,
+    onEdit: (BookEntity) -> Unit,
     onSettings: () -> Unit,
 ) {
     val hasBackgroundImage = state.preferences.bookshelfBackgroundPath != null
@@ -339,6 +368,7 @@ private fun BookshelfScreen(
                             backdrop = backdrop,
                             onClick = { onOpen(book) },
                             onDelete = { onDelete(book) },
+                            onEdit = { onEdit(book) },
                         )
                     }
                 }
@@ -394,13 +424,14 @@ private fun BookRow(
     backdrop: Backdrop,
     onClick: () -> Unit,
     onDelete: () -> Unit,
+    onEdit: () -> Unit,
 ) {
     if (liquidGlassEnabled) {
         RealtimeGlassCard(
             backdrop = backdrop,
             onClick = onClick,
         ) {
-            BookRowContent(book = book, onDelete = onDelete)
+            BookRowContent(book = book, onDelete = onDelete, onEdit = onEdit)
         }
     } else {
         Card(
@@ -410,7 +441,7 @@ private fun BookRow(
             showIndication = true,
             onClick = onClick,
         ) {
-            BookRowContent(book = book, onDelete = onDelete)
+            BookRowContent(book = book, onDelete = onDelete, onEdit = onEdit)
         }
     }
 }
@@ -450,9 +481,123 @@ private fun RealtimeGlassCard(
 }
 
 @Composable
+private fun BookshelfGlassSheet(
+    show: Boolean,
+    book: BookEntity?,
+    backdrop: Backdrop,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit,
+) {
+    val titleState = remember { TextFieldState() }
+    val authorState = remember { TextFieldState() }
+    var sheetHeight by remember { mutableStateOf(0) }
+    LaunchedEffect(book) {
+        if (book != null) {
+            titleState.edit { replace(0, length, book.title) }
+            authorState.edit { replace(0, length, book.author) }
+        }
+    }
+    val glassColor = homeGlassColor()
+    val sheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+    AnimatedVisibility(
+        visible = show && book != null,
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(show) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(
+                            requireUnconsumed = false,
+                            pass = PointerEventPass.Initial,
+                        )
+                        val slop = viewConfiguration.touchSlop
+                        var moved = 0f
+                        var isTap = true
+                        var up: PointerInputChange? = null
+                        while (true) {
+                            val event = awaitPointerEvent(pass = PointerEventPass.Final)
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (change.changedToUp()) {
+                                up = change
+                                break
+                            }
+                            if (!change.isConsumed) {
+                                moved += change.positionChange().getDistance()
+                                if (moved > slop) {
+                                    isTap = false
+                                    break
+                                }
+                            }
+                        }
+                        if (!isTap || up == null) return@awaitEachGesture
+                        if (down.position.y < size.height - sheetHeight) onDismiss()
+                    }
+                },
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+                    .onSizeChanged { sheetHeight = it.height }
+                    .drawBackdrop(
+                        backdrop = backdrop,
+                        shape = { sheetShape },
+                        effects = {
+                            vibrancy()
+                            blur(20.dp.toPx())
+                        },
+                        onDrawSurface = { drawRect(glassColor) },
+                    )
+                    .navigationBarsPadding()
+                    .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 16.dp),
+            ) {
+                Text(
+                    text = stringResourceCompat(R.string.edit_book_info),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    style = MiuixTheme.textStyles.body1.copy(fontWeight = FontWeight.Medium),
+                    textAlign = TextAlign.Center,
+                )
+                TextField(
+                    state = titleState,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = stringResourceCompat(R.string.title_label),
+                )
+                Spacer(Modifier.height(8.dp))
+                TextField(
+                    state = authorState,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = stringResourceCompat(R.string.author_label),
+                )
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    TextButton(
+                        text = stringResourceCompat(R.string.cancel),
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Button(
+                        onClick = {
+                            onSave(titleState.text.toString(), authorState.text.toString())
+                        },
+                        enabled = titleState.text.isNotBlank(),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResourceCompat(R.string.save))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun BookRowContent(
     book: BookEntity,
     onDelete: () -> Unit,
+    onEdit: () -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(14.dp),
@@ -504,6 +649,12 @@ private fun BookRowContent(
             Text(
                 text = "${book.bookFormat.label} · ${formatBytes(book.sizeBytes)}",
                 style = MiuixTheme.textStyles.body2,
+            )
+        }
+        IconButton(onClick = onEdit) {
+            Icon(
+                MiuixIcons.Edit,
+                contentDescription = stringResourceCompat(R.string.edit_book_info),
             )
         }
         IconButton(onClick = onDelete) {

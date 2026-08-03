@@ -24,6 +24,7 @@ import org.xmlpull.v1.XmlPullParser
 class BookRepository(
     context: Context,
     private val dao: BookDao,
+    private val bookmarkDao: BookmarkDao,
 ) {
     private val resolver: ContentResolver = context.contentResolver
     private val libraryDir = File(context.filesDir, "library").also { it.mkdirs() }
@@ -46,15 +47,24 @@ class BookRepository(
         val format = BookFormat.fromFileName(metadata.name)
             ?: BookFormat.fromMimeType(metadata.mimeType)
             ?: return@withContext ImportOutcome.Unsupported(metadata.name)
+        // Cap the import size: shared/VIEW intents are exported=true and any
+        // app could otherwise trigger an unbounded copy into internal storage.
+        if ((metadata.sizeBytes ?: 0L) > MAX_IMPORT_BYTES) {
+            return@withContext ImportOutcome.Failed(
+                metadata.name,
+                IllegalStateException("File exceeds the import size limit"),
+            )
+        }
 
         val id = UUID.randomUUID().toString()
         val destination = File(booksDir, "$id.${format.extension}")
         val temporary = File(booksDir, "$id.part")
         try {
             val digest = copyAndDigest(uri, temporary)
-            if (dao.findBySha256(digest) != null) {
+            val existing = dao.findBySha256(digest)
+            if (existing != null) {
                 temporary.delete()
-                return@withContext ImportOutcome.Duplicate(metadata.name)
+                return@withContext ImportOutcome.Duplicate(metadata.name, existing.id)
             }
 
             if (!temporary.renameTo(destination)) {
@@ -117,6 +127,31 @@ class BookRepository(
         val book = dao.getById(bookId) ?: return
         dao.update(book.copy(progression = progression, lastOpenedAt = System.currentTimeMillis()))
     }
+
+    fun observeBookmarks(bookId: Long): Flow<List<BookmarkEntity>> = bookmarkDao.observeByBook(bookId)
+
+    suspend fun addBookmark(bookmark: BookmarkEntity): Long =
+        withContext(Dispatchers.IO) { bookmarkDao.insert(bookmark) }
+
+    suspend fun removeBookmark(bookmarkId: Long) =
+        withContext(Dispatchers.IO) { bookmarkDao.deleteById(bookmarkId) }
+
+    suspend fun findPublicationBookmark(bookId: Long, kind: String, locatorJson: String): BookmarkEntity? =
+        bookmarkDao.findPublication(bookId, kind, locatorJson)
+
+    suspend fun findTxtBookmark(bookId: Long, itemIndex: Int, scrollOffset: Int): BookmarkEntity? =
+        bookmarkDao.findTxt(bookId, itemIndex, scrollOffset)
+
+    /**
+     * Updates only title/author (never progression/lastOpenedAt). Returns
+     * false when the trimmed title is empty.
+     */
+    suspend fun updateMetadata(bookId: Long, title: String, author: String): Boolean =
+        withContext(Dispatchers.IO) {
+            val sanitized = sanitizeMetadata(title, author) ?: return@withContext false
+            dao.updateMetadata(bookId, sanitized.first, sanitized.second)
+            true
+        }
 
     private fun queryMetadata(uri: Uri): SourceMetadata {
         var name = uri.lastPathSegment?.substringAfterLast('/') ?: "Imported book"
@@ -320,14 +355,30 @@ class BookRepository(
         private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "gif")
         private const val MAX_METADATA_BYTES = 2 * 1024 * 1024
         private const val MAX_COVER_BYTES = 10L * 1024L * 1024L
-        private const val MAX_TEXT_FIELD_LENGTH = 500
         private const val MAX_ORIGINAL_NAME_LENGTH = 1_000
     }
 }
 
+/** Shared by [BookRepository.updateMetadata] and [sanitizeMetadata]. */
+internal const val MAX_TEXT_FIELD_LENGTH = 500
+
+/** Hard cap for imported book files (covers large PDFs/CBZ). */
+internal const val MAX_IMPORT_BYTES = 512L * 1024L * 1024L
+
 sealed interface ImportOutcome {
     data class Imported(val id: Long, val book: BookEntity) : ImportOutcome
-    data class Duplicate(val name: String) : ImportOutcome
+    /** [bookId] lets the caller open the already-imported book directly. */
+    data class Duplicate(val name: String, val bookId: Long) : ImportOutcome
     data class Unsupported(val name: String) : ImportOutcome
     data class Failed(val name: String, val error: Throwable) : ImportOutcome
+}
+
+/**
+ * Trims and length-limits title/author; returns null when the title is
+ * blank after trimming.
+ */
+internal fun sanitizeMetadata(title: String, author: String): Pair<String, String>? {
+    val trimmedTitle = title.trim().take(MAX_TEXT_FIELD_LENGTH)
+    if (trimmedTitle.isEmpty()) return null
+    return trimmedTitle to author.trim().take(MAX_TEXT_FIELD_LENGTH)
 }

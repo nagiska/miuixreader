@@ -69,6 +69,8 @@ import io.github.nagiska.miuixreader.data.AppThemeMode
 import io.github.nagiska.miuixreader.data.BackgroundTarget
 import io.github.nagiska.miuixreader.data.BookEntity
 import io.github.nagiska.miuixreader.data.BookFormat
+import io.github.nagiska.miuixreader.data.BookmarkEntity
+import io.github.nagiska.miuixreader.data.BookmarkKind
 import io.github.nagiska.miuixreader.data.ReaderBackgroundMode
 import io.github.nagiska.miuixreader.data.ReaderFontFamily
 import io.github.nagiska.miuixreader.data.ReaderPreferences
@@ -79,6 +81,9 @@ import io.github.nagiska.miuixreader.ui.reader.ReaderBackdrop
 import io.github.nagiska.miuixreader.ui.reader.ReaderChrome
 import io.github.nagiska.miuixreader.ui.reader.ReaderChromeState
 import io.github.nagiska.miuixreader.ui.reader.ReaderPositionLabel
+import io.github.nagiska.miuixreader.ui.reader.ReaderSearchResult
+import io.github.nagiska.miuixreader.ui.reader.flattenToc
+import io.github.nagiska.miuixreader.ui.reader.pageToProgression
 import io.github.nagiska.miuixreader.ui.theme.ReaderTheme
 import java.io.File
 import kotlinx.coroutines.CancellationException
@@ -94,12 +99,15 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import org.readium.adapter.pdfium.document.PdfiumDocumentFactory
 import org.readium.adapter.pdfium.navigator.PdfiumEngineProvider
+import org.readium.r2.navigator.DecorableNavigator
 import org.readium.r2.navigator.Navigator
 import org.readium.r2.navigator.OverflowableNavigator
+import org.readium.r2.navigator.SelectableNavigator
 import org.readium.r2.navigator.VisualNavigator
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.epub.EpubPreferences
+import org.readium.r2.navigator.Decoration
 import org.readium.r2.navigator.image.ImageNavigatorFragment
 import org.readium.r2.navigator.input.InputListener
 import org.readium.r2.navigator.input.TapEvent
@@ -109,10 +117,13 @@ import org.readium.r2.navigator.preferences.Color as ReadiumColor
 import org.readium.r2.navigator.preferences.FontFamily as ReadiumFontFamily
 import org.readium.r2.navigator.preferences.Theme as ReadiumTheme
 import org.readium.r2.navigator.util.DirectionalNavigationAdapter
+import org.readium.r2.shared.publication.services.content.Content
+import org.readium.r2.shared.publication.services.content.content
 import org.readium.r2.shared.publication.services.locateProgression
 import org.readium.r2.shared.publication.services.positions
 import org.readium.r2.shared.ExperimentalReadiumApi
 import org.readium.r2.shared.publication.Layout
+import org.readium.r2.shared.publication.Link
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Publication
 import org.readium.r2.shared.publication.allAreHtml
@@ -192,6 +203,7 @@ class ReaderActivity : FragmentActivity() {
             } catch (_: Exception) {
                 null
             }
+            currentBookId = book?.id ?: -1L
             if (book == null || !File(book.path).isFile) {
                 showError(getString(R.string.reader_book_missing))
                 return@launch
@@ -334,6 +346,7 @@ class ReaderActivity : FragmentActivity() {
             epubNavigator = navigator as? EpubNavigatorFragment
             installPublicationInput()
             observeProgression(book)
+            observeBookmarks(book.id)
             observePublicationPreferences(supportsTypography)
             if (touchExplorationEnabled) showPublicationChrome()
         }
@@ -412,7 +425,22 @@ class ReaderActivity : FragmentActivity() {
                         onImportBackground = { backgroundLauncher.launch(arrayOf("image/*")) },
                         onClearBackground = { clearReaderBackground() },
                         autoHideEnabled = !touchExplorationEnabled,
-                        onSeekProgress = { seekPublication(it) },
+                        onSeekPage = ::seekToPage,
+                        tableOfContents = publication?.tableOfContents.orEmpty(),
+                        onTocClick = { link ->
+                            navigator?.go(link)
+                            chromeState.closePanel()
+                        },
+                        searchResults = searchResults,
+                        searching = searching,
+                        onSearchQuery = ::handleSearchQuery,
+                        onSearchResultClick = ::handleSearchResultClick,
+                        bookmarks = bookmarks,
+                        bookmarked = bookmarked,
+                        onToggleBookmark = ::toggleBookmark,
+                        onBookmarkClick = ::handleBookmarkClick,
+                        onBookmarkDelete = ::handleBookmarkDelete,
+                        searchAvailable = publicationReader == PublicationReader.EPUB,
                         onVisibilityChanged = { visible ->
                             if (!visible && !chromeState.visible) {
                                 composeView.visibility = View.GONE
@@ -499,12 +527,46 @@ class ReaderActivity : FragmentActivity() {
     private var seekingPublication = false
     private var latestSeekPage = 1
     private var lastSeekPageConsumed = 1
+    private var cachedPositions: List<Locator>? = null
+    private var searchJob: Job? = null
+    private var searchResults by mutableStateOf(emptyList<ReaderSearchResult>())
+    private var searching by mutableStateOf(false)
 
-    /** Jumps the publication to the page matching [fraction], following the finger. */
-    private fun seekPublication(fraction: Float) {
-        val total = publicationPositionCount
-        if (total <= 0) return
-        seekToPage((fraction.coerceIn(0f, 1f) * total).roundToInt().coerceIn(1, total))
+    private fun handleSearchQuery(query: String) {
+        searchJob?.cancel()
+        if (query.isBlank()) {
+            searchResults = emptyList()
+            searching = false
+            return
+        }
+        searching = true
+        searchJob = lifecycleScope.launch {
+            val results = withContext(Dispatchers.Default) { searchInPublication(query) }
+            searchResults = results
+            searching = false
+        }
+    }
+
+    private fun handleSearchResultClick(result: ReaderSearchResult) {
+        if (result.locator != null) navigator?.go(result.locator)
+        chromeState.closePanel()
+    }
+
+    private suspend fun searchInPublication(query: String): List<ReaderSearchResult> {
+        val pub = publication ?: return emptyList()
+        // EPUB only: PDF/image publications have no text content service.
+        if (publicationReader != PublicationReader.EPUB) return emptyList()
+        val content = pub.content() ?: return emptyList()
+        val tocTitles = flattenToc(pub.tableOfContents).associate { it.link.href.toString() to (it.link.title ?: "") }
+        return content.elements().mapNotNull { element ->
+            val text = (element as? Content.TextualElement)?.text ?: return@mapNotNull null
+            if (!text.contains(query, ignoreCase = true)) return@mapNotNull null
+            ReaderSearchResult(
+                title = tocTitles[element.locator.href.toString()] ?: "",
+                snippet = text.trim().take(160),
+                locator = element.locator,
+            )
+        }.take(100)
     }
 
     /**
@@ -527,10 +589,12 @@ class ReaderActivity : FragmentActivity() {
                     val pub = publication ?: break
                     val nav = navigator ?: break
                     val seekResult = withContext(Dispatchers.Default) {
-                        val positions = pub.positions()
+                        val positions = cachedPositions ?: pub.positions().also {
+                            cachedPositions = it
+                        }
                         val locator = positions.getOrNull(target - 1) ?: run {
                             val total = positions.size.coerceAtLeast(1)
-                            pub.locateProgression((target - 1).toDouble() / total)
+                            pub.locateProgression(pageToProgression(target, total))
                         }
                         locator to positions.size
                     }
@@ -661,6 +725,8 @@ class ReaderActivity : FragmentActivity() {
     }
 
     private fun showTextContent(book: BookEntity, content: String) {
+        currentBookId = book.id
+        observeBookmarks(book.id)
         if (touchExplorationEnabled) chromeState.show()
         val initialPosition = parseTextPosition(book.progression)
         setContent {
@@ -675,6 +741,31 @@ class ReaderActivity : FragmentActivity() {
                     preferences = preferences,
                     chrome = chromeState,
                     autoHideEnabled = !touchExplorationEnabled,
+                    bookmarks = bookmarks,
+                    onToggleTxtBookmark = { index, offset ->
+                        lifecycleScope.launch {
+                            val books = (application as ReaderApplication).books
+                            val existing = books.findTxtBookmark(book.id, index, offset)
+                            if (existing != null) {
+                                books.removeBookmark(existing.id)
+                            } else {
+                                books.addBookmark(
+                                    BookmarkEntity(
+                                        bookId = book.id,
+                                        kind = BookmarkKind.BOOKMARK,
+                                        itemIndex = index,
+                                        scrollOffset = offset,
+                                        excerpt = content.substring(
+                                            (index * 4_000).coerceAtMost(content.length),
+                                            ((index + 1) * 4_000).coerceAtMost(content.length),
+                                        ).take(80),
+                                        createdAt = System.currentTimeMillis(),
+                                    ),
+                                )
+                            }
+                        }
+                    },
+                    onBookmarkDelete = ::handleBookmarkDelete,
                     onProgress = { position ->
                         lifecycleScope.launch {
                             (application as ReaderApplication).books.saveProgression(
@@ -724,6 +815,106 @@ class ReaderActivity : FragmentActivity() {
         }
     }
 
+    private var bookmarks by mutableStateOf(emptyList<BookmarkEntity>())
+    private var bookmarked by mutableStateOf(false)
+    private var currentBookId: Long = -1L
+
+    private fun observeBookmarks(bookId: Long) {
+        lifecycleScope.launch {
+            (application as ReaderApplication).books.observeBookmarks(bookId)
+                .collect { list ->
+                    bookmarks = list
+                    val current = navigator?.currentLocator?.value
+                    bookmarked = current != null && list.any {
+                        it.kind == BookmarkKind.BOOKMARK &&
+                            it.locatorJson == current.toJSON().toString()
+                    }
+                    refreshHighlights()
+                }
+        }
+    }
+
+    private fun toggleBookmark() {
+        val bookId = currentBookId
+        if (bookId < 0) return
+        val books = (application as ReaderApplication).books
+        lifecycleScope.launch {
+            // EPUB selection first: save it as a highlight decoration.
+            val selectable = navigator as? SelectableNavigator
+            val selection = selectable?.currentSelection()
+            if (selection != null) {
+                val json = selection.locator.toJSON().toString()
+                val existing = books.findPublicationBookmark(bookId, BookmarkKind.HIGHLIGHT, json)
+                if (existing != null) {
+                    books.removeBookmark(existing.id)
+                } else {
+                    books.addBookmark(
+                        BookmarkEntity(
+                            bookId = bookId,
+                            kind = BookmarkKind.HIGHLIGHT,
+                            locatorJson = json,
+                            excerpt = selection.locator.text.before?.take(80) ?: "",
+                            createdAt = System.currentTimeMillis(),
+                        ),
+                    )
+                }
+                selectable.clearSelection()
+                return@launch
+            }
+            val locator = navigator?.currentLocator?.value ?: return@launch
+            val json = locator.toJSON().toString()
+            val existing = books.findPublicationBookmark(bookId, BookmarkKind.BOOKMARK, json)
+            if (existing != null) {
+                books.removeBookmark(existing.id)
+            } else {
+                books.addBookmark(
+                    BookmarkEntity(
+                        bookId = bookId,
+                        kind = BookmarkKind.BOOKMARK,
+                        locatorJson = json,
+                        excerpt = locator.text.before?.take(80) ?: "",
+                        createdAt = System.currentTimeMillis(),
+                    ),
+                )
+            }
+        }
+    }
+
+    /** Renders the saved EPUB highlights via the navigator's decoration API. */
+    private fun refreshHighlights() {
+        val decorable = navigator as? DecorableNavigator ?: return
+        if (!decorable.supportsDecorationStyle(Decoration.Style.Highlight::class)) return
+        val decorations = bookmarks
+            .filter { it.kind == BookmarkKind.HIGHLIGHT && it.locatorJson != null }
+            .mapNotNull { bookmark ->
+                runCatching { Locator.fromJSON(JSONObject(bookmark.locatorJson!!)) }
+                    .getOrNull()
+                    ?.let { locator ->
+                        Decoration(
+                            id = "bm-${bookmark.id}",
+                            locator = locator,
+                            style = Decoration.Style.Highlight(tint = 0x33FFEB3B),
+                        )
+                    }
+            }
+        lifecycleScope.launch { decorable.applyDecorations(decorations, "bookmarks") }
+    }
+
+    private fun handleBookmarkClick(bookmark: BookmarkEntity) {
+        bookmark.locatorJson?.let { json ->
+            runCatching { Locator.fromJSON(JSONObject(json)) }.getOrNull()?.let {
+                navigator?.go(it)
+            }
+        }
+        chromeState.closePanel()
+    }
+
+    private fun handleBookmarkDelete(bookmark: BookmarkEntity) {
+        lifecycleScope.launch {
+            (application as ReaderApplication).books.removeBookmark(bookmark.id)
+        }
+    }
+
     private fun observeProgression(book: BookEntity) {
         lifecycleScope.launch {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -739,6 +930,11 @@ class ReaderActivity : FragmentActivity() {
                         page = position ?: 1,
                         totalPages = total,
                     )
+                    // Pin state must follow the page (and the bookmark list).
+                    val locatorJson = locator.toJSON().toString()
+                    bookmarked = bookmarks.any {
+                        it.kind == BookmarkKind.BOOKMARK && it.locatorJson == locatorJson
+                    }
                     refreshPublicationBackdrop()
                     (application as ReaderApplication).books.saveProgression(
                         book.id,
@@ -872,6 +1068,7 @@ class ReaderActivity : FragmentActivity() {
 
     /** Recomputes the total page count after re-pagination (e.g. font changes). */
     private fun refreshPositionCount() {
+        cachedPositions = null
         lifecycleScope.launch {
             val size = withContext(Dispatchers.Default) { publication?.positions()?.size ?: 0 }
             if (size > 0) publicationPositionCount = size
@@ -997,6 +1194,9 @@ private fun TextReaderScreen(
     preferences: ReaderPreferences,
     chrome: ReaderChromeState,
     autoHideEnabled: Boolean,
+    bookmarks: List<BookmarkEntity>,
+    onToggleTxtBookmark: (Int, Int) -> Unit,
+    onBookmarkDelete: (BookmarkEntity) -> Unit,
     onProgress: (TextPosition) -> Unit,
     onBack: () -> Unit,
     onFontFamilyChange: (ReaderFontFamily) -> Unit,
@@ -1115,6 +1315,90 @@ private fun TextReaderScreen(
     val seekScope = rememberCoroutineScope()
     var latestSeekFraction by remember { mutableFloatStateOf(0f) }
     var seekingText by remember { mutableStateOf(false) }
+    var searchResults by remember { mutableStateOf(emptyList<ReaderSearchResult>()) }
+    var searching by remember { mutableStateOf(false) }
+    var searchJob by remember { mutableStateOf<Job?>(null) }
+    val handleSearchQuery: (String) -> Unit = { query ->
+        searchJob?.cancel()
+        if (query.isBlank()) {
+            searchResults = emptyList()
+            searching = false
+        } else {
+            searching = true
+            searchJob = seekScope.launch {
+            val results = withContext(Dispatchers.Default) {
+                val lowered = content.lowercase()
+                val q = query.lowercase()
+                val out = mutableListOf<ReaderSearchResult>()
+                var from = 0
+                while (out.size < 100) {
+                    val idx = lowered.indexOf(q, from)
+                    if (idx < 0) break
+                    val search = chunkStartOffsets.binarySearch(idx)
+                    val itemIndex =
+                        (if (search >= 0) search else -search - 2).coerceIn(0, chunks.lastIndex)
+                    val start = (idx - 30).coerceAtLeast(0)
+                    val end = (idx + q.length + 30).coerceAtMost(content.length)
+                    out += ReaderSearchResult(
+                        title = textProgressLabel(
+                            textProgression(
+                                chunks = chunks,
+                                chunkStartOffsets = chunkStartOffsets,
+                                totalCharacterCount = totalCharacterCount,
+                                itemIndex = itemIndex,
+                                offsetFraction = 0f,
+                                isAtEnd = false,
+                            ),
+                        ),
+                        snippet = content.substring(start, end).trim(),
+                        itemIndex = itemIndex,
+                        scrollOffset = 0,
+                        hitChar = idx,
+                    )
+                    from = idx + q.length
+                }
+                out
+            }
+            searchResults = results
+            searching = false
+        }
+        }
+    }
+    val handleSearchResultClick: (ReaderSearchResult) -> Unit = { result ->
+        if (result.itemIndex >= 0) {
+            seekScope.launch {
+                listState.scrollToItem(result.itemIndex, 0)
+                if (result.hitChar >= 0) {
+                    // Fine-tune inside the chunk by character ratio once the
+                    // item has laid out.
+                    val itemSize = snapshotFlow {
+                        listState.layoutInfo.visibleItemsInfo
+                            .firstOrNull { it.index == result.itemIndex }?.size ?: 0
+                    }.first { it > 0 }
+                    val charsInChunk = chunks[result.itemIndex].length.coerceAtLeast(1)
+                    val inChunk =
+                        (result.hitChar - chunkStartOffsets[result.itemIndex])
+                            .coerceIn(0, charsInChunk - 1)
+                    listState.scrollToItem(
+                        result.itemIndex,
+                        (itemSize * inChunk.toFloat() / charsInChunk).roundToInt(),
+                    )
+                }
+            }
+        }
+        chrome.closePanel()
+    }
+    val txtBookmarked = bookmarks.any {
+        it.kind == BookmarkKind.BOOKMARK &&
+            it.itemIndex == listState.firstVisibleItemIndex &&
+            it.scrollOffset == listState.firstVisibleItemScrollOffset
+    }
+    val handleTxtBookmarkClick: (BookmarkEntity) -> Unit = { bookmark ->
+        if (bookmark.itemIndex >= 0) {
+            seekScope.launch { listState.scrollToItem(bookmark.itemIndex, bookmark.scrollOffset) }
+        }
+        chrome.closePanel()
+    }
     val seekTo: (Float) -> Unit = { fraction ->
         latestSeekFraction = fraction
         if (!seekingText) {
@@ -1224,7 +1508,21 @@ private fun TextReaderScreen(
             onImportBackground = onImportBackground,
             onClearBackground = onClearBackground,
             autoHideEnabled = autoHideEnabled,
-            onSeekProgress = seekTo,
+            onSeekFraction = seekTo,
+            searchResults = searchResults,
+            searching = searching,
+            onSearchQuery = handleSearchQuery,
+            onSearchResultClick = handleSearchResultClick,
+            bookmarks = bookmarks,
+            bookmarked = txtBookmarked,
+            onToggleBookmark = {
+                onToggleTxtBookmark(
+                    listState.firstVisibleItemIndex,
+                    listState.firstVisibleItemScrollOffset,
+                )
+            },
+            onBookmarkClick = handleTxtBookmarkClick,
+            onBookmarkDelete = onBookmarkDelete,
         )
     }
 }

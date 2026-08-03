@@ -90,6 +90,10 @@ class LibraryViewModel(
         viewModelScope.launch { repository.delete(book) }
     }
 
+    fun updateMetadata(book: BookEntity, title: String, author: String) {
+        viewModelScope.launch { repository.updateMetadata(book.id, title, author) }
+    }
+
     fun setLiquidGlassEnabled(enabled: Boolean) {
         viewModelScope.launch { getApplication<ReaderApplication>().settings.setLiquidGlassEnabled(enabled) }
     }
