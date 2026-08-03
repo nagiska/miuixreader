@@ -35,6 +35,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -97,7 +98,11 @@ import top.yukonga.miuix.kmp.icon.extended.Background
 import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.icon.extended.Image
 import top.yukonga.miuix.kmp.preference.SliderPreference
+import top.yukonga.miuix.kmp.theme.Colors
+import top.yukonga.miuix.kmp.theme.LocalContentColor
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.theme.darkColorScheme
+import top.yukonga.miuix.kmp.theme.lightColorScheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
 
 @Stable
@@ -190,6 +195,31 @@ fun ReaderChrome(
     }
     var sheetBackProgress by remember { mutableFloatStateOf(0f) }
     var chromeBackProgress by remember { mutableFloatStateOf(0f) }
+    // The chrome floats over the reader background; pick a light or dark color
+    // scheme for its text/controls based on that background blended with the
+    // white glass layer, so a white reader background stays readable in a dark
+    // system theme (and vice versa).
+    val systemBackground = MiuixTheme.colorScheme.background
+    val readerBackground = when (preferences.readerBackgroundMode) {
+        ReaderBackgroundMode.FOLLOW_THEME -> systemBackground
+        ReaderBackgroundMode.COLOR -> Color(preferences.readerBackgroundColor)
+        ReaderBackgroundMode.IMAGE -> Color.Black
+    }
+    val chromeColors = remember(
+        preferences.readerBackgroundMode,
+        preferences.readerBackgroundColor,
+        systemBackground,
+    ) {
+        val glassAlpha = (
+            if (systemBackground.luminance() < 0.5f) 0.08f else 0.18f
+            ) + 0.08f
+        val blendedGlass = Color(
+            red = (glassAlpha + readerBackground.red * (1f - glassAlpha)).coerceIn(0f, 1f),
+            green = (glassAlpha + readerBackground.green * (1f - glassAlpha)).coerceIn(0f, 1f),
+            blue = (glassAlpha + readerBackground.blue * (1f - glassAlpha)).coerceIn(0f, 1f),
+        )
+        if (blendedGlass.luminance() < 0.5f) darkColorScheme() else lightColorScheme()
+    }
     // Predictive back: an open sheet follows the back gesture down, then closes.
     PredictiveBackHandler(enabled = chrome.panel != ReaderPanel.NONE) { progress ->
         try {
@@ -262,6 +292,7 @@ fun ReaderChrome(
                 onBack = onBack,
                 onTypography = { chrome.open(ReaderPanel.TYPOGRAPHY) },
                 onBackground = { chrome.open(ReaderPanel.BACKGROUND) },
+                colors = chromeColors,
                 backProgress = chromeBackProgress,
                 modifier = Modifier.onGloballyPositioned {
                     topBarBottom = it.positionInWindow().y + it.size.height.toFloat()
@@ -273,6 +304,7 @@ fun ReaderChrome(
                 backdrop = backdrop,
                 liquidGlassEnabled = preferences.liquidGlassEnabled,
                 onClick = { chrome.open(ReaderPanel.PROGRESS) },
+                colors = chromeColors,
                 backProgress = chromeBackProgress,
                 modifier = Modifier.onGloballyPositioned {
                     bottomBarTop = it.positionInWindow().y
@@ -284,6 +316,7 @@ fun ReaderChrome(
             preferences = preferences,
             backdrop = backdrop,
             onDismiss = chrome::hide,
+            colors = chromeColors,
             backProgress = sheetBackProgress,
             onFontFamilyChange = onFontFamilyChange,
             onFontScaleChange = onFontScaleChange,
@@ -295,6 +328,8 @@ fun ReaderChrome(
             backdrop = backdrop,
             imagePath = readerImagePath,
             imageScrim = readerImageScrim,
+            colors = chromeColors,
+            readerBackground = readerBackground,
             onDismiss = chrome::hide,
             backProgress = sheetBackProgress,
             onFollowTheme = onBackgroundFollowTheme,
@@ -309,6 +344,7 @@ fun ReaderChrome(
             liquidGlassEnabled = preferences.liquidGlassEnabled,
             backdrop = backdrop,
             onDismiss = chrome::hide,
+            colors = chromeColors,
             onSeek = onSeekProgress,
             backProgress = sheetBackProgress,
         )
@@ -325,6 +361,7 @@ private fun ReaderTopBar(
     onBack: () -> Unit,
     onTypography: () -> Unit,
     onBackground: () -> Unit,
+    colors: Colors,
     backProgress: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
@@ -335,67 +372,71 @@ private fun ReaderTopBar(
         enter = readerEnter { -it } + fadeIn(animationSpec = folmeSpring(0.9f, 0.38f)),
         exit = readerExit { -it } + fadeOut(animationSpec = folmeSpring(0.9f, 0.38f)),
     ) {
-        Box(
-            modifier = modifier
-                .fillMaxWidth()
-                .graphicsLayer { translationY = -backProgress * size.height }
-                .then(readerGlassModifier(preferences.liquidGlassEnabled, backdrop, glassColor, topShape()))
-                .then(
-                    if (!preferences.liquidGlassEnabled) {
-                        Modifier.background(MiuixTheme.colorScheme.surface.copy(alpha = 0.96f))
-                    } else {
-                        Modifier
-                    },
-                ),
-        ) {
-            SmallTopAppBar(
-                title = title,
-                modifier = Modifier.windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top)),
-                color = Color.Transparent,
-                navigationIcon = {
-                    GlassCircleButton(
-                        enabled = preferences.liquidGlassEnabled,
-                        backdrop = backdrop,
-                    ) {
-                        IconButton(onClick = onBack) {
-                            Icon(MiuixIcons.Back, contentDescription = stringResourceCompat(R.string.back))
-                        }
-                    }
-                },
-                actions = {
-                    if (supportsTypography) {
-                        GlassCircleButton(
-                            enabled = preferences.liquidGlassEnabled,
-                            backdrop = backdrop,
-                        ) {
-                            IconButton(onClick = onTypography) {
-                                Text(
-                                    text = "Aa",
-                                    modifier = Modifier.semantics {
-                                        contentDescription = typographyDescription
-                                    },
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MiuixTheme.colorScheme.onSurface,
-                                )
+        MiuixTheme(colors = colors) {
+            CompositionLocalProvider(LocalContentColor provides colors.onBackground) {
+                Box(
+                    modifier = modifier
+                        .fillMaxWidth()
+                        .graphicsLayer { translationY = -backProgress * size.height }
+                        .then(readerGlassModifier(preferences.liquidGlassEnabled, backdrop, glassColor, topShape()))
+                        .then(
+                            if (!preferences.liquidGlassEnabled) {
+                                Modifier.background(MiuixTheme.colorScheme.surface.copy(alpha = 0.96f))
+                            } else {
+                                Modifier
+                            },
+                        ),
+                ) {
+                    SmallTopAppBar(
+                        title = title,
+                        modifier = Modifier.windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top)),
+                        color = Color.Transparent,
+                        navigationIcon = {
+                            GlassCircleButton(
+                                enabled = preferences.liquidGlassEnabled,
+                                backdrop = backdrop,
+                            ) {
+                                IconButton(onClick = onBack) {
+                                    Icon(MiuixIcons.Back, contentDescription = stringResourceCompat(R.string.back))
+                                }
                             }
-                        }
-                    }
-                    if (supportsTypography) {
-                        GlassCircleButton(
-                            enabled = preferences.liquidGlassEnabled,
-                            backdrop = backdrop,
-                        ) {
-                            IconButton(onClick = onBackground) {
-                                Icon(
-                                    MiuixIcons.Background,
-                                    contentDescription = stringResourceCompat(R.string.reader_background),
-                                )
+                        },
+                        actions = {
+                            if (supportsTypography) {
+                                GlassCircleButton(
+                                    enabled = preferences.liquidGlassEnabled,
+                                    backdrop = backdrop,
+                                ) {
+                                    IconButton(onClick = onTypography) {
+                                        Text(
+                                            text = "Aa",
+                                            modifier = Modifier.semantics {
+                                                contentDescription = typographyDescription
+                                            },
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MiuixTheme.colorScheme.onSurface,
+                                        )
+                                    }
+                                }
                             }
-                        }
-                    }
-                },
-            )
+                            if (supportsTypography) {
+                                GlassCircleButton(
+                                    enabled = preferences.liquidGlassEnabled,
+                                    backdrop = backdrop,
+                                ) {
+                                    IconButton(onClick = onBackground) {
+                                        Icon(
+                                            MiuixIcons.Background,
+                                            contentDescription = stringResourceCompat(R.string.reader_background),
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                    )
+                }
+            }
         }
     }
 }
@@ -435,6 +476,7 @@ private fun ReaderBottomBar(
     label: String,
     backdrop: Backdrop,
     liquidGlassEnabled: Boolean,
+    colors: Colors,
     onClick: (() -> Unit)? = null,
     backProgress: Float = 0f,
     modifier: Modifier = Modifier,
@@ -446,39 +488,43 @@ private fun ReaderBottomBar(
         enter = readerEnter { it } + fadeIn(animationSpec = folmeSpring(0.9f, 0.38f)),
         exit = readerExit { it } + fadeOut(animationSpec = folmeSpring(0.9f, 0.38f)),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .navigationBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            contentAlignment = Alignment.BottomCenter,
-        ) {
-            Card(
-                onClick = onClick,
-                modifier = modifier
-                    .fillMaxWidth()
-                    .graphicsLayer { translationY = backProgress * size.height }
-                    .then(
-                        readerGlassModifier(
-                            liquidGlassEnabled,
-                            backdrop,
-                            glassColor,
-                            RoundedCornerShape(CardDefaults.CornerRadius),
-                        ),
-                    ),
-                colors = if (liquidGlassEnabled) {
-                    CardDefaults.defaultColors(color = Color.Transparent)
-                } else {
-                    CardDefaults.defaultColors()
-                },
-                cornerRadius = CardDefaults.CornerRadius,
-            ) {
-                Text(
-                    text = label,
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
-                    style = MiuixTheme.textStyles.body2,
-                    textAlign = TextAlign.Center,
-                )
+        MiuixTheme(colors = colors) {
+            CompositionLocalProvider(LocalContentColor provides colors.onBackground) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    contentAlignment = Alignment.BottomCenter,
+                ) {
+                    Card(
+                        onClick = onClick,
+                        modifier = modifier
+                            .fillMaxWidth()
+                            .graphicsLayer { translationY = backProgress * size.height }
+                            .then(
+                                readerGlassModifier(
+                                    liquidGlassEnabled,
+                                    backdrop,
+                                    glassColor,
+                                    RoundedCornerShape(CardDefaults.CornerRadius),
+                                ),
+                            ),
+                        colors = if (liquidGlassEnabled) {
+                            CardDefaults.defaultColors(color = Color.Transparent)
+                        } else {
+                            CardDefaults.defaultColors()
+                        },
+                        cornerRadius = CardDefaults.CornerRadius,
+                    ) {
+                        Text(
+                            text = label,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 10.dp),
+                            style = MiuixTheme.textStyles.body2,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
             }
         }
     }
@@ -490,6 +536,7 @@ private fun ReaderGlassSheet(
     title: String,
     liquidGlassEnabled: Boolean,
     backdrop: Backdrop,
+    colors: Colors,
     onDismiss: () -> Unit,
     backProgress: Float = 0f,
     content: @Composable () -> Unit,
@@ -512,89 +559,93 @@ private fun ReaderGlassSheet(
         enter = readerEnter { it } + fadeIn(animationSpec = folmeSpring(0.9f, 0.38f)),
         exit = readerExit { it } + fadeOut(animationSpec = folmeSpring(0.9f, 0.38f)),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(show) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(
-                            requireUnconsumed = false,
-                            pass = PointerEventPass.Initial,
-                        )
-                        val up = waitForUpOrCancellation(pass = PointerEventPass.Final)
-                        if (up == null) return@awaitEachGesture
-                        val aboveSheet = down.position.y < size.height - sheetHeight
-                        if (aboveSheet) {
-                            onDismiss()
-                        }
-                    }
-                },
-            contentAlignment = Alignment.BottomCenter,
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp)
-                    .graphicsLayer { translationY = offsetY + backProgress * sheetHeight },
-            ) {
-                Column(
+        MiuixTheme(colors = colors) {
+            CompositionLocalProvider(LocalContentColor provides colors.onBackground) {
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .onSizeChanged { sheetHeight = it.height }
-                        .then(
-                            if (liquidGlassEnabled) {
-                                readerGlassModifier(
-                                    preferencesEnabled = true,
-                                    backdrop = backdrop,
-                                    color = panelGlassColor,
-                                    shape = sheetShape,
+                        .fillMaxSize()
+                        .pointerInput(show) {
+                            awaitEachGesture {
+                                val down = awaitFirstDown(
+                                    requireUnconsumed = false,
+                                    pass = PointerEventPass.Initial,
                                 )
-                            } else {
-                                Modifier.clip(sheetShape).background(MiuixTheme.colorScheme.background)
-                            },
-                        )
-                        .navigationBarsPadding()
-                        .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                                val up = waitForUpOrCancellation(pass = PointerEventPass.Final)
+                                if (up == null) return@awaitEachGesture
+                                val aboveSheet = down.position.y < size.height - sheetHeight
+                                if (aboveSheet) {
+                                    onDismiss()
+                                }
+                            }
+                        },
+                    contentAlignment = Alignment.BottomCenter,
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(28.dp)
-                            .pointerInput(show) {
-                                detectVerticalDragGestures(
-                                    onVerticalDrag = { change, dragAmount ->
-                                        change.consume()
-                                        offsetY = (offsetY + dragAmount).coerceAtLeast(0f)
-                                    },
-                                    onDragEnd = {
-                                        if (offsetY > dismissThreshold) {
-                                            onDismiss()
-                                        } else {
-                                            offsetY = 0f
-                                        }
-                                    },
-                                    onDragCancel = {
-                                        offsetY = 0f
+                            .padding(horizontal = 12.dp)
+                            .graphicsLayer { translationY = offsetY + backProgress * sheetHeight },
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onSizeChanged { sheetHeight = it.height }
+                                .then(
+                                    if (liquidGlassEnabled) {
+                                        readerGlassModifier(
+                                            preferencesEnabled = true,
+                                            backdrop = backdrop,
+                                            color = panelGlassColor,
+                                            shape = sheetShape,
+                                        )
+                                    } else {
+                                        Modifier.clip(sheetShape).background(MiuixTheme.colorScheme.background)
                                     },
                                 )
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .width(45.dp)
-                                .height(4.dp)
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.28f)),
-                        )
+                                .navigationBarsPadding()
+                                .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(28.dp)
+                                    .pointerInput(show) {
+                                        detectVerticalDragGestures(
+                                            onVerticalDrag = { change, dragAmount ->
+                                                change.consume()
+                                                offsetY = (offsetY + dragAmount).coerceAtLeast(0f)
+                                            },
+                                            onDragEnd = {
+                                                if (offsetY > dismissThreshold) {
+                                                    onDismiss()
+                                                } else {
+                                                    offsetY = 0f
+                                                }
+                                            },
+                                            onDragCancel = {
+                                                offsetY = 0f
+                                            },
+                                        )
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .width(45.dp)
+                                        .height(4.dp)
+                                        .clip(RoundedCornerShape(2.dp))
+                                        .background(MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.28f)),
+                                )
+                            }
+                            Text(
+                                text = title,
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                                style = MiuixTheme.textStyles.body1.copy(fontWeight = FontWeight.Medium),
+                                textAlign = TextAlign.Center,
+                            )
+                            content()
+                        }
                     }
-                    Text(
-                        text = title,
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                        style = MiuixTheme.textStyles.body1.copy(fontWeight = FontWeight.Medium),
-                        textAlign = TextAlign.Center,
-                    )
-                    content()
                 }
             }
         }
@@ -606,6 +657,7 @@ private fun ReaderTypographySheet(
     show: Boolean,
     preferences: ReaderPreferences,
     backdrop: Backdrop,
+    colors: Colors,
     onDismiss: () -> Unit,
     backProgress: Float = 0f,
     onFontFamilyChange: (ReaderFontFamily) -> Unit,
@@ -618,6 +670,7 @@ private fun ReaderTypographySheet(
         title = stringResourceCompat(R.string.typography),
         liquidGlassEnabled = preferences.liquidGlassEnabled,
         backdrop = backdrop,
+        colors = colors,
         onDismiss = onDismiss,
         backProgress = backProgress,
     ) {
@@ -674,6 +727,8 @@ private fun ReaderBackgroundSheet(
     backdrop: Backdrop,
     imagePath: String?,
     imageScrim: Float,
+    colors: Colors,
+    readerBackground: Color,
     onDismiss: () -> Unit,
     backProgress: Float = 0f,
     onFollowTheme: () -> Unit,
@@ -691,6 +746,7 @@ private fun ReaderBackgroundSheet(
         title = stringResourceCompat(R.string.reader_background),
         liquidGlassEnabled = preferences.liquidGlassEnabled,
         backdrop = backdrop,
+        colors = colors,
         onDismiss = onDismiss,
         backProgress = backProgress,
     ) {
@@ -706,7 +762,7 @@ private fun ReaderBackgroundSheet(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 BackgroundSwatch(
-                    color = MiuixTheme.colorScheme.background,
+                    color = readerBackground,
                     selected = preferences.readerBackgroundMode == ReaderBackgroundMode.FOLLOW_THEME,
                     label = stringResourceCompat(R.string.theme_system),
                     showLetter = true,
@@ -809,6 +865,7 @@ private fun ReaderProgressSheet(
     fraction: Float,
     liquidGlassEnabled: Boolean,
     backdrop: Backdrop,
+    colors: Colors,
     onDismiss: () -> Unit,
     onSeek: (Float) -> Unit,
     backProgress: Float = 0f,
@@ -829,6 +886,7 @@ private fun ReaderProgressSheet(
         title = stringResourceCompat(R.string.reader_progress),
         liquidGlassEnabled = liquidGlassEnabled,
         backdrop = backdrop,
+        colors = colors,
         onDismiss = onDismiss,
         backProgress = backProgress,
     ) {
