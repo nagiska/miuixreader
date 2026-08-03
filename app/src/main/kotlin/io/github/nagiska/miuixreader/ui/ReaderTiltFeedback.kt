@@ -21,6 +21,10 @@ import androidx.compose.ui.node.LayoutModifierNode
 import androidx.compose.ui.node.PointerInputModifierNode
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntSize
+import kotlin.math.asin
+import kotlin.math.sin
+import kotlin.math.toDegrees
+import kotlin.math.toRadians
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.interfaces.HoldDownInteraction
 
@@ -92,8 +96,25 @@ data class ReaderTiltFeedback(
                     pivotFractionY = if (offset.y < bounds.height / 2f) 1f else 0f,
                 )
 
-                targetX = if (offset.y < bounds.height / 2f) tiltAmount else -tiltAmount
-                targetY = if (offset.x < bounds.width / 2f) -tiltAmount else tiltAmount
+                // Balance the two rotations so the far corner sinks
+                // symmetrically: the rotationY edge displacement (W/2 * sin)
+                // must match the rotationX edge displacement (H/2 * sin),
+                // otherwise on wide cards the adjacent corner drifts away
+                // and looks like it disappears.
+                val tiltX = tiltAmount
+                val tiltY = if (bounds.width > 0) {
+                    toDegrees(
+                        asin(
+                            (sin(toRadians(tiltAmount.toDouble())) *
+                                bounds.height / bounds.width).coerceIn(-1.0, 1.0),
+                        ),
+                    ).toFloat()
+                } else {
+                    tiltAmount
+                }
+
+                targetX = if (offset.y < bounds.height / 2f) tiltX else -tiltX
+                targetY = if (offset.x < bounds.width / 2f) -tiltY else tiltY
             }
         }
 

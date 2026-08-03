@@ -246,6 +246,8 @@ class ReaderActivity : FragmentActivity() {
         val imageListener = object : ImageNavigatorFragment.Listener {}
         val epubPaginationListener = object : EpubNavigatorFragment.PaginationListener {
             override fun onPageChanged(pageIndex: Int, totalPages: Int, locator: Locator) {
+                // Re-pagination (e.g. font size change) changes the page count.
+                publicationPositionCount = totalPages
                 refreshPublicationBackdrop()
                 lifecycleScope.launch { applyEpubPageStyle(latestPreferences) }
             }
