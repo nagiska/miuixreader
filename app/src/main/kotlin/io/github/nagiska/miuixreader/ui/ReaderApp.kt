@@ -1,13 +1,9 @@
 package io.github.nagiska.miuixreader.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.interaction.Interaction
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -72,8 +68,6 @@ import io.github.nagiska.miuixreader.data.bookFormat
 import io.github.nagiska.miuixreader.ui.theme.ReaderTheme
 import java.util.Locale
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import androidx.compose.ui.util.lerp
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
@@ -98,6 +92,8 @@ import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
+import top.yukonga.miuix.kmp.utils.SinkFeedback
+import top.yukonga.miuix.kmp.utils.pressable
 
 @Composable
 fun ReaderApp(
@@ -430,56 +426,43 @@ private fun RealtimeGlassCard(
     content: @Composable () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
-    val pressProgress = remember { Animatable(0f) }
-    val animationSpec = spring<Float>(
-        dampingRatio = 0.8f,
-        stiffness = 600f,
-    )
     val glassColor = homeGlassColor()
     val cardShape = RoundedCornerShape(CardDefaults.CornerRadius)
 
-    LaunchedEffect(interactionSource) {
-        interactionSource.interactions.collect { interaction: Interaction ->
-            when (interaction) {
-                is PressInteraction.Press -> launch {
-                    pressProgress.animateTo(1f, animationSpec)
-                }
-                is PressInteraction.Release,
-                is PressInteraction.Cancel,
-                -> launch {
-                    pressProgress.animateTo(0f, animationSpec)
-                }
-                else -> Unit
-            }
-        }
-    }
-
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .drawBackdrop(
-                backdrop = backdrop,
-                shape = { cardShape },
-                effects = {
-                    vibrancy()
-                    blur(20.dp.toPx())
-                },
-                layerBlock = {
-                    val scale = lerp(1f, 0.94f, pressProgress.value)
-                    scaleX = scale
-                    scaleY = scale
-                },
-                onDrawSurface = { drawRect(glassColor) },
-            )
-            .combinedClickable(
-                interactionSource = interactionSource,
-                indication = null,
-                onClick = onClick,
-            ),
+        modifier = Modifier.fillMaxWidth(),
         cornerRadius = CardDefaults.CornerRadius,
         colors = CardDefaults.defaultColors(color = Color.Transparent),
     ) {
-        content()
+        // The official Miuix SinkFeedback sits outside drawBackdrop so the
+        // whole card — glass layer included — sinks together on press
+        // (0.94 + spring(0.8f, 600f)) instead of animating only the glass
+        // layer, which made the content feel detached from the backdrop.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .pressable(
+                    interactionSource = interactionSource,
+                    indication = SinkFeedback(),
+                    delay = null,
+                )
+                .drawBackdrop(
+                    backdrop = backdrop,
+                    shape = { cardShape },
+                    effects = {
+                        vibrancy()
+                        blur(20.dp.toPx())
+                    },
+                    onDrawSurface = { drawRect(glassColor) },
+                )
+                .combinedClickable(
+                    interactionSource = interactionSource,
+                    indication = null,
+                    onClick = onClick,
+                ),
+        ) {
+            content()
+        }
     }
 }
 
@@ -756,7 +739,7 @@ internal fun stringResourceCompat(id: Int, vararg args: Any): String =
 private fun homeGlassColor(): Color =
     Color.White.copy(alpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.08f else 0.16f)
 
-private val HOME_PAGE_TOP_OFFSET = 12.dp
+private val HOME_PAGE_TOP_OFFSET = 36.dp
 
 private fun formatBytes(bytes: Long): String = when {
     bytes >= 1024 * 1024 -> String.format(Locale.getDefault(), "%.1f MB", bytes / (1024f * 1024f))
