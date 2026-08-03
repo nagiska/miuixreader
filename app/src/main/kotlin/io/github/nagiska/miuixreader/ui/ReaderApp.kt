@@ -92,7 +92,7 @@ import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
-import top.yukonga.miuix.kmp.utils.SinkFeedback
+import top.yukonga.miuix.kmp.utils.TiltFeedback
 import top.yukonga.miuix.kmp.utils.pressable
 
 @Composable
@@ -410,7 +410,7 @@ private fun BookRow(
         Card(
             modifier = Modifier.fillMaxWidth(),
             cornerRadius = CardDefaults.CornerRadius,
-            pressFeedbackType = PressFeedbackType.Sink,
+            pressFeedbackType = PressFeedbackType.Tilt,
             showIndication = true,
             onClick = onClick,
         ) {
@@ -426,6 +426,7 @@ private fun RealtimeGlassCard(
     content: @Composable () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
+    val tiltFeedback = remember { TiltFeedback() }
     val glassColor = homeGlassColor()
     val cardShape = RoundedCornerShape(CardDefaults.CornerRadius)
 
@@ -434,16 +435,16 @@ private fun RealtimeGlassCard(
         cornerRadius = CardDefaults.CornerRadius,
         colors = CardDefaults.defaultColors(color = Color.Transparent),
     ) {
-        // The official Miuix SinkFeedback sits outside drawBackdrop so the
-        // whole card — glass layer included — sinks together on press
-        // (0.94 + spring(0.8f, 600f)) instead of animating only the glass
-        // layer, which made the content feel detached from the backdrop.
+        // The official Miuix TiltFeedback sits outside drawBackdrop so the
+        // whole card — glass layer included — tilts together on press: the
+        // corner under the finger sinks down (rotationX/rotationY with the
+        // transform origin on the opposite corner) instead of a uniform scale.
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .pressable(
                     interactionSource = interactionSource,
-                    indication = SinkFeedback(),
+                    indication = tiltFeedback,
                     delay = null,
                 )
                 .drawBackdrop(
