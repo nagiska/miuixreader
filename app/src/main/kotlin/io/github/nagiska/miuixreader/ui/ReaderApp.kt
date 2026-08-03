@@ -434,10 +434,10 @@ private fun RealtimeGlassCard(
         cornerRadius = CardDefaults.CornerRadius,
         colors = CardDefaults.defaultColors(color = Color.Transparent),
     ) {
-        // ReaderTiltFeedback outside drawBackdrop: the whole card — glass
-        // layer included — tilts together on press. No clip outside the
-        // rotation: a fixed rounded clip would cut the moving glass edge
-        // and make it look covered.
+        // ReaderTiltFeedback outside, clip inside the rotation: like the
+        // plain card (pressable → shape), the rounded clip travels with the
+        // glass layer, so the glass always fills the card outline while
+        // tilting — no cut-off edges, no occlusion, no re-render needed.
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -446,6 +446,7 @@ private fun RealtimeGlassCard(
                     indication = tiltFeedback,
                     delay = null,
                 )
+                .clip(cardShape)
                 .drawBackdrop(
                     backdrop = backdrop,
                     shape = { cardShape },

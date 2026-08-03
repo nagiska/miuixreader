@@ -32,9 +32,13 @@ import top.yukonga.miuix.kmp.interfaces.HoldDownInteraction
  * - the camera is far away (48dp vs the stock 12dp), so the perspective
  *   does not squash the rounded corners;
  * - the two rotations are balanced by the card aspect ratio, so the far
- *   corner stays put instead of drifting away and looking occluded;
- * - no clipping is applied outside the rotation: a fixed rounded clip
- *   would cut the moving glass edge and make it look covered.
+ *   corner stays put instead of drifting away and looking occluded.
+ *
+ * The card must clip to its rounded shape *inside* the rotation (after
+ * this modifier), mirroring the plain card's pressable → shape order:
+ * the clip travels with the glass layer, so the glass always fills the
+ * outline while tilting. A clip placed outside the rotation is fixed and
+ * cuts the moving glass edge, which looks like the card is covered.
  */
 @Stable
 data class ReaderTiltFeedback(
