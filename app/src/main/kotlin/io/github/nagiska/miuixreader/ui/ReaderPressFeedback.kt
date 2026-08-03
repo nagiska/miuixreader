@@ -91,7 +91,8 @@ data class ReaderPressFeedback(
                         0.5f
                     },
                 )
-                invalidateLayout()
+                // The scale animation drives the next layout pass, which picks
+                // up the updated transform origin.
             }
         }
 

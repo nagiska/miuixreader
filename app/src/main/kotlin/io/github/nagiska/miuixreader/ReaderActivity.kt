@@ -530,13 +530,14 @@ class ReaderActivity : FragmentActivity() {
                         }
                         locator to positions.size
                     }
-                    if (seekResult.first != null) {
+                    val locator = seekResult.first
+                    if (locator != null) {
                         // Keep the slider's total in sync with the positions list
                         // (re-pagination after a font change recalculates it).
                         if (seekResult.second > 0) {
                             publicationPositionCount = seekResult.second
                         }
-                        nav.go(seekResult.first, animated = false)
+                        nav.go(locator, animated = false)
                     }
                     if (target == latestSeekPage) break
                 }
