@@ -2,8 +2,6 @@ package io.github.nagiska.miuixreader.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -92,7 +90,6 @@ import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
-import top.yukonga.miuix.kmp.utils.pressable
 
 @Composable
 fun ReaderApp(
@@ -424,8 +421,6 @@ private fun RealtimeGlassCard(
     onClick: () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    val interactionSource = remember { MutableInteractionSource() }
-    val tiltFeedback = remember { ReaderTiltFeedback() }
     val glassColor = homeGlassColor()
     val cardShape = RoundedCornerShape(CardDefaults.CornerRadius)
 
@@ -433,20 +428,12 @@ private fun RealtimeGlassCard(
         modifier = Modifier.fillMaxWidth(),
         cornerRadius = CardDefaults.CornerRadius,
         colors = CardDefaults.defaultColors(color = Color.Transparent),
+        pressFeedbackType = PressFeedbackType.Tilt,
+        onClick = onClick,
     ) {
-        // ReaderTiltFeedback (stock Miuix tilt, 40dp camera) outside, rounded
-        // clip inside the rotation: the press feel matches the plain card,
-        // the glass always fills the outline while tilting, and the far
-        // camera keeps the rounded corners from being squashed.
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .pressable(
-                    interactionSource = interactionSource,
-                    indication = tiltFeedback,
-                    delay = null,
-                )
-                .clip(cardShape)
                 .drawBackdrop(
                     backdrop = backdrop,
                     shape = { cardShape },
@@ -455,11 +442,6 @@ private fun RealtimeGlassCard(
                         blur(20.dp.toPx())
                     },
                     onDrawSurface = { drawRect(glassColor) },
-                )
-                .combinedClickable(
-                    interactionSource = interactionSource,
-                    indication = null,
-                    onClick = onClick,
                 ),
         ) {
             content()
