@@ -425,7 +425,7 @@ private fun RealtimeGlassCard(
     content: @Composable () -> Unit,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
-    val pressFeedback = remember { ReaderPressFeedback() }
+    val tiltFeedback = remember { ReaderTiltFeedback() }
     val glassColor = homeGlassColor()
     val cardShape = RoundedCornerShape(CardDefaults.CornerRadius)
 
@@ -434,16 +434,17 @@ private fun RealtimeGlassCard(
         cornerRadius = CardDefaults.CornerRadius,
         colors = CardDefaults.defaultColors(color = Color.Transparent),
     ) {
-        // Flat press feedback sits outside drawBackdrop so the whole card —
-        // glass layer included — sinks together: it anchors on the exact
-        // press point and shrinks slightly, with no 3D rotation, so the far
-        // corner is never occluded on the glass surface.
+        // 3D corner-sinking tilt outside drawBackdrop so the whole card —
+        // glass layer included — tilts together; the clip keeps the rounded
+        // outline clean while the card rotates (far camera + balanced
+        // rotations prevent the corner artifacts).
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .clip(cardShape)
                 .pressable(
                     interactionSource = interactionSource,
-                    indication = pressFeedback,
+                    indication = tiltFeedback,
                     delay = null,
                 )
                 .drawBackdrop(

@@ -247,7 +247,11 @@ class ReaderActivity : FragmentActivity() {
         val epubPaginationListener = object : EpubNavigatorFragment.PaginationListener {
             override fun onPageChanged(pageIndex: Int, totalPages: Int, locator: Locator) {
                 refreshPublicationBackdrop()
-                lifecycleScope.launch { applyEpubPageStyle(latestPreferences) }
+                // Skip the style re-injection while dragging the progress
+                // slider — it re-renders the WebView and makes the sheet flicker.
+                lifecycleScope.launch {
+                    if (!seekingProgression) applyEpubPageStyle(latestPreferences)
+                }
             }
 
             override fun onPageLoaded() {
@@ -540,6 +544,10 @@ class ReaderActivity : FragmentActivity() {
                         nav.go(locator, animated = false)
                     }
                     if (target == latestSeekPage) break
+                    // Let the page render before the next jump; without this
+                    // pause a fast drag swaps whole pages every frame and
+                    // flickers.
+                    delay(80)
                 }
             } finally {
                 seekingPublication = false
@@ -551,6 +559,10 @@ class ReaderActivity : FragmentActivity() {
                     seekToPage(latestSeekPage)
                 } else {
                     refreshPublicationBackdrop()
+                    // Restore the style injection that was skipped while
+                    // dragging (onPageChanged may not fire again for the
+                    // current resource).
+                    applyEpubPageStyle(latestPreferences)
                 }
             }
         }
