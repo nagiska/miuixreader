@@ -1018,11 +1018,15 @@ private fun TextReaderScreen(
                             requireUnconsumed = false,
                             pass = PointerEventPass.Initial,
                         )
+                        // Snapshot chrome visibility when the gesture starts so a
+                        // concurrent dismiss (tap-outside, drag-down) in the same
+                        // frame cannot re-trigger a show() right after hide().
+                        val wasHidden = !chrome.visible
                         val up = waitForUpOrCancellation(pass = PointerEventPass.Final)
                         if (up == null) return@awaitEachGesture
                         val activationTop = size.height * TEXT_CHROME_TAP_REGION_TOP
                         val activationBottom = size.height * TEXT_CHROME_TAP_REGION_BOTTOM
-                        if (!chrome.visible && (
+                        if (wasHidden && (
                                 down.position.y <= activationTop ||
                                     down.position.y >= size.height - activationBottom
                                 )
