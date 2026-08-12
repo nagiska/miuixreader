@@ -94,8 +94,23 @@ class LibraryViewModel(
         viewModelScope.launch { repository.updateMetadata(book.id, title, author) }
     }
 
+    fun replaceCover(bookId: Long, uri: Uri) {
+        viewModelScope.launch {
+            val replaced = repository.replaceCover(bookId, uri)
+            message.value = getApplication<ReaderApplication>().getString(
+                if (replaced) R.string.cover_updated else R.string.cover_update_failed,
+            )
+        }
+    }
+
     fun setLiquidGlassEnabled(enabled: Boolean) {
         viewModelScope.launch { getApplication<ReaderApplication>().settings.setLiquidGlassEnabled(enabled) }
+    }
+
+    fun setLiquidGlassOpacity(opacity: Float) {
+        viewModelScope.launch {
+            getApplication<ReaderApplication>().settings.setLiquidGlassOpacity(opacity)
+        }
     }
 
     fun setThemeMode(mode: AppThemeMode) {

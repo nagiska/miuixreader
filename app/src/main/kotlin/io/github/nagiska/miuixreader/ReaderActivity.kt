@@ -89,6 +89,7 @@ import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -529,6 +530,7 @@ class ReaderActivity : FragmentActivity() {
     private var lastSeekPageConsumed = 1
     private var cachedPositions: List<Locator>? = null
     private var searchJob: Job? = null
+    private var searchHighlightJob: Job? = null
     private var searchResults by mutableStateOf(emptyList<ReaderSearchResult>())
     private var searching by mutableStateOf(false)
 
@@ -548,8 +550,41 @@ class ReaderActivity : FragmentActivity() {
     }
 
     private fun handleSearchResultClick(result: ReaderSearchResult) {
-        result.locator?.let { navigator?.go(it) }
+        result.locator?.let { locator ->
+            navigator?.go(locator)
+            showSearchHighlight(locator)
+        }
         chromeState.closePanel()
+    }
+
+    private fun showSearchHighlight(locator: Locator) {
+        val decorable = navigator as? DecorableNavigator ?: return
+        if (!decorable.supportsDecorationStyle(Decoration.Style.Highlight::class)) return
+        searchHighlightJob?.cancel()
+        val group = "search-${SystemClock.uptimeMillis()}"
+        searchHighlightJob = lifecycleScope.launch {
+            try {
+                decorable.applyDecorations(
+                    listOf(
+                        Decoration(
+                            id = "search-hit",
+                            locator = locator,
+                            style = Decoration.Style.Highlight(tint = 0x66FFD54F),
+                        ),
+                    ),
+                    group,
+                )
+                delay(3_000)
+            } finally {
+                withContext(NonCancellable) {
+                    try {
+                        decorable.applyDecorations(emptyList(), group)
+                    } catch (_: Exception) {
+                        // The navigator may already be closing with the activity.
+                    }
+                }
+            }
+        }
     }
 
     private suspend fun searchInPublication(query: String): List<ReaderSearchResult> {

@@ -11,6 +11,7 @@ enum class BackgroundTarget { BOOKSHELF, READER }
 data class ReaderPreferences(
     val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
     val liquidGlassEnabled: Boolean = false,
+    val liquidGlassOpacity: Float = DEFAULT_LIQUID_GLASS_OPACITY,
     val bookshelfBackgroundPath: String? = null,
     val bookshelfBackgroundScrim: Float = DEFAULT_IMAGE_SCRIM,
     val readerBackgroundMode: ReaderBackgroundMode = ReaderBackgroundMode.FOLLOW_THEME,
@@ -27,7 +28,13 @@ const val MIN_IMAGE_SCRIM = 0.28f
 const val MAX_IMAGE_SCRIM = 0.55f
 const val MIN_FONT_SCALE = 0.75f
 const val MAX_FONT_SCALE = 2f
+const val DEFAULT_LIQUID_GLASS_OPACITY = 1f
+const val MIN_LIQUID_GLASS_OPACITY = 0.2f
+const val MAX_LIQUID_GLASS_OPACITY = 1f
 const val DEFAULT_READER_BACKGROUND: Int = -461330
+
+fun clampLiquidGlassOpacity(opacity: Float): Float =
+    opacity.coerceIn(MIN_LIQUID_GLASS_OPACITY, MAX_LIQUID_GLASS_OPACITY)
 
 fun contrastTextColor(background: Int): Int {
     val luminance = relativeLuminance(background)

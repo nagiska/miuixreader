@@ -19,6 +19,7 @@
     <string name="appearance">外观</string>
     <string name="liquid_glass">液态玻璃</string>
     <string name="liquid_glass_summary">在书架和阅读器表面使用 Backdrop 玻璃效果</string>
+    <string name="liquid_glass_opacity">玻璃透明度</string>
     <string name="theme_mode">主题模式</string>
     <string name="theme_system">跟随系统</string>
     <string name="theme_light">浅色</string>
@@ -63,6 +64,9 @@
     <string name="no_bookmarks">暂无书签</string>
     <string name="bookmark">书签</string>
     <string name="edit_book_info">编辑书籍信息</string>
+    <string name="change_cover">更换封面</string>
+    <string name="cover_updated">书籍封面已更新</string>
+    <string name="cover_update_failed">无法更新书籍封面</string>
     <string name="title_label">标题</string>
     <string name="author_label">作者</string>
     <string name="save">保存</string>

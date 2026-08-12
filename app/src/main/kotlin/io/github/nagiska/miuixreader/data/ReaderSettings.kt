@@ -29,6 +29,7 @@ private val Context.readerSettingsDataStore by preferencesDataStore(name = "read
 class ReaderSettings(private val context: Context) {
     private val backgroundMutex = Mutex()
     private val glassKey = booleanPreferencesKey("liquid_glass_enabled")
+    private val glassOpacityKey = floatPreferencesKey("liquid_glass_opacity")
     private val themeModeKey = stringPreferencesKey("theme_mode")
     private val bookshelfBackgroundPathKey = stringPreferencesKey("bookshelf_background_path")
     private val bookshelfBackgroundScrimKey = floatPreferencesKey("bookshelf_background_scrim")
@@ -52,6 +53,9 @@ class ReaderSettings(private val context: Context) {
                 ReaderPreferences(
                     themeMode = values[themeModeKey].enumValueOrDefault(AppThemeMode.SYSTEM),
                     liquidGlassEnabled = values[glassKey] ?: false,
+                    liquidGlassOpacity = clampLiquidGlassOpacity(
+                        values[glassOpacityKey] ?: DEFAULT_LIQUID_GLASS_OPACITY,
+                    ),
                     bookshelfBackgroundPath = values[bookshelfBackgroundPathKey].existingFilePath(),
                     bookshelfBackgroundScrim = values[bookshelfBackgroundScrimKey]
                         ?.coerceIn(MIN_IMAGE_SCRIM, MAX_IMAGE_SCRIM)
@@ -78,6 +82,12 @@ class ReaderSettings(private val context: Context) {
 
     suspend fun setLiquidGlassEnabled(enabled: Boolean) {
         context.readerSettingsDataStore.edit { it[glassKey] = enabled }
+    }
+
+    suspend fun setLiquidGlassOpacity(opacity: Float) {
+        context.readerSettingsDataStore.edit {
+            it[glassOpacityKey] = clampLiquidGlassOpacity(opacity)
+        }
     }
 
     suspend fun setThemeMode(mode: AppThemeMode) {

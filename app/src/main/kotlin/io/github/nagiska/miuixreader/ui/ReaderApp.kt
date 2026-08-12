@@ -13,15 +13,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
-import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -32,6 +32,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -47,12 +49,11 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -72,6 +73,8 @@ import io.github.nagiska.miuixreader.data.AppThemeMode
 import io.github.nagiska.miuixreader.data.BackgroundTarget
 import io.github.nagiska.miuixreader.data.BookEntity
 import io.github.nagiska.miuixreader.data.BookFormat
+import io.github.nagiska.miuixreader.data.MAX_LIQUID_GLASS_OPACITY
+import io.github.nagiska.miuixreader.data.MIN_LIQUID_GLASS_OPACITY
 import io.github.nagiska.miuixreader.data.ReaderBackgroundMode
 import io.github.nagiska.miuixreader.data.ReaderPreferences
 import io.github.nagiska.miuixreader.data.bookFormat
@@ -100,6 +103,7 @@ import top.yukonga.miuix.kmp.icon.extended.File
 import top.yukonga.miuix.kmp.icon.extended.Image
 import top.yukonga.miuix.kmp.icon.extended.Search
 import top.yukonga.miuix.kmp.icon.extended.Settings
+import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
@@ -111,6 +115,7 @@ fun ReaderApp(
     onOpen: (BookEntity) -> Unit,
     onImportBookshelfBackground: () -> Unit,
     onImportReaderBackground: () -> Unit,
+    onImportBookCover: (BookEntity) -> Unit,
     onEditBook: (BookEntity, String, String) -> Unit,
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -132,80 +137,89 @@ fun ReaderApp(
     }
 
     ReaderTheme(themeMode = state.preferences.themeMode) {
-        val homeBackdrop = rememberLayerBackdrop()
-        Scaffold(containerColor = Color.Transparent) { _ ->
-            Box(Modifier.fillMaxSize()) {
-                Box(Modifier.fillMaxSize().layerBackdrop(homeBackdrop)) {
-                    HomeBackground(
-                        path = state.preferences.bookshelfBackgroundPath,
-                        scrim = state.preferences.bookshelfBackgroundScrim,
-                    )
-                }
-                if (settingsVisible) {
-                    SettingsScreen(
-                        preferences = state.preferences,
-                        onLiquidGlassChange = viewModel::setLiquidGlassEnabled,
-                        onThemeModeChange = viewModel::setThemeMode,
-                        onImportBookshelfBackground = onImportBookshelfBackground,
-                        onImportReaderBackground = onImportReaderBackground,
-                        onClearBookshelfBackground = {
-                            viewModel.clearBackground(BackgroundTarget.BOOKSHELF)
-                        },
-                        onClearReaderBackground = {
-                            viewModel.clearBackground(BackgroundTarget.READER)
-                        },
-                        onBack = { settingsVisible = false },
-                    )
-                } else {
-                    BookshelfScreen(
-                        state = state,
-                        liquidGlassEnabled = state.preferences.liquidGlassEnabled,
-                        backdrop = homeBackdrop,
-                        searchVisible = searchVisible,
-                        onSearchVisibleChange = { searchVisible = it },
-                        onQueryChange = viewModel::setQuery,
-                        onImport = onImport,
-                        onOpen = onOpen,
-                        onDelete = { pendingDelete = it },
-                        onEdit = { pendingEdit = it },
-                        onSettings = { settingsVisible = true },
-                    )
-                }
-                pendingDelete?.let { book ->
-                    top.yukonga.miuix.kmp.overlay.OverlayDialog(
-                        title = stringResourceCompat(R.string.delete_book_title),
-                        summary = book.title,
-                        show = true,
-                        onDismissRequest = { pendingDelete = null },
-                    ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            TextButton(
-                                text = stringResourceCompat(R.string.cancel),
-                                onClick = { pendingDelete = null },
-                                modifier = Modifier.weight(1f),
-                            )
-                            TextButton(
-                                text = stringResourceCompat(R.string.delete),
-                                onClick = {
-                                    viewModel.delete(book)
-                                    pendingDelete = null
-                                },
-                                modifier = Modifier.weight(1f),
-                            )
+        CompositionLocalProvider(
+            LocalLiquidGlassOpacity provides state.preferences.liquidGlassOpacity,
+        ) {
+            val homeBackdrop = rememberLayerBackdrop()
+            Scaffold(containerColor = Color.Transparent) { _ ->
+                Box(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxSize().layerBackdrop(homeBackdrop)) {
+                        HomeBackground(
+                            path = state.preferences.bookshelfBackgroundPath,
+                            scrim = state.preferences.bookshelfBackgroundScrim,
+                        )
+                    }
+                    if (settingsVisible) {
+                        SettingsScreen(
+                            preferences = state.preferences,
+                            onLiquidGlassChange = viewModel::setLiquidGlassEnabled,
+                            onLiquidGlassOpacityChange = viewModel::setLiquidGlassOpacity,
+                            onThemeModeChange = viewModel::setThemeMode,
+                            onImportBookshelfBackground = onImportBookshelfBackground,
+                            onImportReaderBackground = onImportReaderBackground,
+                            onClearBookshelfBackground = {
+                                viewModel.clearBackground(BackgroundTarget.BOOKSHELF)
+                            },
+                            onClearReaderBackground = {
+                                viewModel.clearBackground(BackgroundTarget.READER)
+                            },
+                            onBack = { settingsVisible = false },
+                        )
+                    } else {
+                        BookshelfScreen(
+                            state = state,
+                            liquidGlassEnabled = state.preferences.liquidGlassEnabled,
+                            backdrop = homeBackdrop,
+                            searchVisible = searchVisible,
+                            onSearchVisibleChange = { searchVisible = it },
+                            onQueryChange = viewModel::setQuery,
+                            onImport = onImport,
+                            onOpen = onOpen,
+                            onDelete = { pendingDelete = it },
+                            onEdit = { pendingEdit = it },
+                            onSettings = { settingsVisible = true },
+                        )
+                    }
+                    pendingDelete?.let { book ->
+                        top.yukonga.miuix.kmp.overlay.OverlayDialog(
+                            title = stringResourceCompat(R.string.delete_book_title),
+                            summary = book.title,
+                            show = true,
+                            onDismissRequest = { pendingDelete = null },
+                        ) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                TextButton(
+                                    text = stringResourceCompat(R.string.cancel),
+                                    onClick = { pendingDelete = null },
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(
+                                    text = stringResourceCompat(R.string.delete),
+                                    onClick = {
+                                        viewModel.delete(book)
+                                        pendingDelete = null
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
                         }
                     }
-                }
-                pendingEdit?.let { book ->
-                    BookshelfGlassSheet(
-                        show = true,
-                        book = book,
-                        backdrop = homeBackdrop,
-                        onDismiss = { pendingEdit = null },
-                        onSave = { title, author ->
-                            onEditBook(book, title, author)
-                            pendingEdit = null
-                        },
-                    )
+                    pendingEdit?.let { book ->
+                        BookshelfGlassSheet(
+                            show = true,
+                            book = book,
+                            backdrop = homeBackdrop,
+                            onDismiss = { pendingEdit = null },
+                            onImportCover = {
+                                pendingEdit = null
+                                onImportBookCover(book)
+                            },
+                            onSave = { title, author ->
+                                onEditBook(book, title, author)
+                                pendingEdit = null
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -260,81 +274,98 @@ private fun BookshelfScreen(
         }
     }
     val headerColor = if (hasBackgroundImage) Color.White else MiuixTheme.colorScheme.onBackground
+    val topGlassColor = homeGlassColor()
     Scaffold(
-        modifier = Modifier.fillMaxSize().padding(top = HOME_PAGE_TOP_OFFSET),
+        modifier = Modifier.fillMaxSize(),
         containerColor = Color.Transparent,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
-            Column(
+            Box(
                 modifier = Modifier
-                    .background(
-                        if (hasBackgroundImage) {
-                            Color.Transparent
-                        } else {
-                            MiuixTheme.colorScheme.surface.copy(alpha = 0.96f)
-                        },
-                    )
-                    .statusBarsPadding()
-                    .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top)),
+                    .fillMaxWidth()
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
-                Row(
+                val shape = RoundedCornerShape(CardDefaults.CornerRadius)
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(52.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (searchVisible) {
-                        SearchField(
-                            query = state.query,
-                            onQueryChange = onQueryChange,
-                            onClose = {
-                                onQueryChange("")
-                                onSearchVisibleChange(false)
+                        .then(
+                            if (liquidGlassEnabled) {
+                                Modifier.drawBackdrop(
+                                    backdrop = backdrop,
+                                    shape = { shape },
+                                    effects = {
+                                        vibrancy()
+                                        blur(18.dp.toPx())
+                                    },
+                                    onDrawSurface = { drawRect(topGlassColor) },
+                                )
+                            } else {
+                                Modifier
+                                    .clip(shape)
+                                    .background(MiuixTheme.colorScheme.surface.copy(alpha = 0.96f))
                             },
-                            modifier = Modifier.weight(1f).padding(start = 16.dp),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                    } else {
-                        Box(
-                            modifier = Modifier.weight(1f),
-                            contentAlignment = if (titleCollapsed) Alignment.Center else Alignment.CenterStart,
-                        ) {
-                            Text(
-                                text = stringResourceCompat(R.string.bookshelf_title),
-                                color = headerColor,
-                                fontSize = if (titleCollapsed) 16.sp else 22.sp,
-                                fontWeight = if (titleCollapsed) FontWeight.Medium else FontWeight.Bold,
-                                maxLines = 1,
-                                modifier = Modifier.padding(horizontal = 20.dp),
+                        ),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (searchVisible) {
+                            SearchField(
+                                query = state.query,
+                                onQueryChange = onQueryChange,
+                                onClose = {
+                                    onQueryChange("")
+                                    onSearchVisibleChange(false)
+                                },
+                                modifier = Modifier.weight(1f).padding(start = 12.dp),
                             )
-                        }
-                        IconButton(onClick = { onSearchVisibleChange(true) }) {
-                            Icon(
-                                MiuixIcons.Search,
-                                contentDescription = stringResourceCompat(R.string.search),
-                                tint = headerColor,
-                            )
-                        }
-                        IconButton(onClick = onImport) {
-                            Icon(
-                                MiuixIcons.Add,
-                                contentDescription = stringResourceCompat(R.string.import_books),
-                                tint = headerColor,
-                            )
-                        }
-                        IconButton(onClick = onSettings) {
-                            Icon(
-                                MiuixIcons.Settings,
-                                contentDescription = stringResourceCompat(R.string.settings),
-                                tint = headerColor,
-                            )
+                            Spacer(Modifier.width(8.dp))
+                        } else {
+                            Box(
+                                modifier = Modifier.weight(1f),
+                                contentAlignment = if (titleCollapsed) Alignment.Center else Alignment.CenterStart,
+                            ) {
+                                Text(
+                                    text = stringResourceCompat(R.string.bookshelf_title),
+                                    color = headerColor,
+                                    fontSize = if (titleCollapsed) 16.sp else 22.sp,
+                                    fontWeight = if (titleCollapsed) FontWeight.Medium else FontWeight.Bold,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(horizontal = 16.dp),
+                                )
+                            }
+                            IconButton(onClick = { onSearchVisibleChange(true) }) {
+                                Icon(
+                                    MiuixIcons.Search,
+                                    contentDescription = stringResourceCompat(R.string.search),
+                                    tint = headerColor,
+                                )
+                            }
+                            IconButton(onClick = onImport) {
+                                Icon(
+                                    MiuixIcons.Add,
+                                    contentDescription = stringResourceCompat(R.string.import_books),
+                                    tint = headerColor,
+                                )
+                            }
+                            IconButton(onClick = onSettings) {
+                                Icon(
+                                    MiuixIcons.Settings,
+                                    contentDescription = stringResourceCompat(R.string.settings),
+                                    tint = headerColor,
+                                )
+                            }
                         }
                     }
                 }
             }
         },
     ) { paddingValues ->
-        Box(Modifier.fillMaxSize().padding(paddingValues)) {
+        Box(Modifier.fillMaxSize().padding(paddingValues).imePadding()) {
             if (state.books.isEmpty()) {
                 if (state.query.isBlank()) {
                     EmptyShelf(
@@ -486,62 +517,75 @@ private fun BookshelfGlassSheet(
     book: BookEntity?,
     backdrop: Backdrop,
     onDismiss: () -> Unit,
+    onImportCover: () -> Unit,
     onSave: (String, String) -> Unit,
 ) {
     val titleState = remember { TextFieldState() }
     val authorState = remember { TextFieldState() }
-    var sheetHeight by remember { mutableStateOf(0) }
-    LaunchedEffect(book) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val dismissSheet = {
+        keyboardController?.hide()
+        focusManager.clearFocus(force = true)
+        onDismiss()
+    }
+    LaunchedEffect(book?.id) {
         if (book != null) {
             titleState.edit { replace(0, length, book.title) }
             authorState.edit { replace(0, length, book.author) }
         }
     }
+    BackHandler(enabled = show && book != null) { dismissSheet() }
     val glassColor = homeGlassColor()
     val sheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
     AnimatedVisibility(
         visible = show && book != null,
         modifier = Modifier.fillMaxSize(),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(show) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(
-                            requireUnconsumed = false,
-                            pass = PointerEventPass.Initial,
-                        )
-                        val slop = viewConfiguration.touchSlop
-                        var moved = 0f
-                        var isTap = true
-                        var up: PointerInputChange? = null
-                        while (true) {
-                            val event = awaitPointerEvent(pass = PointerEventPass.Final)
-                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                            if (change.changedToUp()) {
-                                up = change
-                                break
-                            }
-                            if (!change.isConsumed) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(show) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(
+                                requireUnconsumed = false,
+                                pass = PointerEventPass.Initial,
+                            )
+                            val slop = viewConfiguration.touchSlop
+                            var moved = 0f
+                            var isTap = true
+                            while (true) {
+                                val event = awaitPointerEvent(pass = PointerEventPass.Final)
+                                val change = event.changes.firstOrNull { it.id == down.id }
+                                    ?: break
+                                if (change.changedToUp()) {
+                                    isTap = !change.isConsumed
+                                    break
+                                }
+                                if (change.isConsumed) {
+                                    isTap = false
+                                    break
+                                }
                                 moved += change.positionChange().getDistance()
                                 if (moved > slop) {
                                     isTap = false
                                     break
                                 }
                             }
+                            if (isTap) dismissSheet()
                         }
-                        if (!isTap || up == null) return@awaitEachGesture
-                        if (down.position.y < size.height - sheetHeight) onDismiss()
-                    }
-                },
-            contentAlignment = Alignment.BottomCenter,
-        ) {
+                    },
+            )
             Column(
                 modifier = Modifier
+                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp)
-                    .onSizeChanged { sheetHeight = it.height }
+                    .windowInsetsPadding(
+                        WindowInsets.navigationBars.union(WindowInsets.ime)
+                            .only(WindowInsetsSides.Bottom),
+                    )
                     .drawBackdrop(
                         backdrop = backdrop,
                         shape = { sheetShape },
@@ -551,7 +595,6 @@ private fun BookshelfGlassSheet(
                         },
                         onDrawSurface = { drawRect(glassColor) },
                     )
-                    .navigationBarsPadding()
                     .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 16.dp),
             ) {
                 Text(
@@ -560,6 +603,43 @@ private fun BookshelfGlassSheet(
                     style = MiuixTheme.textStyles.body1.copy(fontWeight = FontWeight.Medium),
                     textAlign = TextAlign.Center,
                 )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(width = 58.dp, height = 82.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MiuixTheme.colorScheme.surfaceContainerHigh),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (book?.coverPath != null) {
+                            AsyncImage(
+                                model = book.coverPath,
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop,
+                            )
+                        } else {
+                            Icon(MiuixIcons.Image, contentDescription = null)
+                        }
+                    }
+                    Button(
+                        onClick = {
+                            keyboardController?.hide()
+                            focusManager.clearFocus(force = true)
+                            onImportCover()
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Icon(MiuixIcons.Image, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResourceCompat(R.string.change_cover))
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
                 TextField(
                     state = titleState,
                     modifier = Modifier.fillMaxWidth(),
@@ -575,11 +655,13 @@ private fun BookshelfGlassSheet(
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     TextButton(
                         text = stringResourceCompat(R.string.cancel),
-                        onClick = onDismiss,
+                        onClick = dismissSheet,
                         modifier = Modifier.weight(1f),
                     )
                     Button(
                         onClick = {
+                            keyboardController?.hide()
+                            focusManager.clearFocus(force = true)
                             onSave(titleState.text.toString(), authorState.text.toString())
                         },
                         enabled = titleState.text.isNotBlank(),
@@ -671,10 +753,17 @@ private fun SearchField(
     modifier: Modifier = Modifier,
 ) {
     val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
         keyboardController?.show()
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            keyboardController?.hide()
+            focusManager.clearFocus(force = true)
+        }
     }
     TextField(
         value = query,
@@ -694,6 +783,7 @@ private fun SearchField(
             IconButton(
                 onClick = {
                     keyboardController?.hide()
+                    focusManager.clearFocus(force = true)
                     onClose()
                 },
             ) {
@@ -707,6 +797,7 @@ private fun SearchField(
 private fun SettingsScreen(
     preferences: ReaderPreferences,
     onLiquidGlassChange: (Boolean) -> Unit,
+    onLiquidGlassOpacityChange: (Float) -> Unit,
     onThemeModeChange: (AppThemeMode) -> Unit,
     onImportBookshelfBackground: () -> Unit,
     onImportReaderBackground: () -> Unit,
@@ -723,12 +814,12 @@ private fun SettingsScreen(
     }
     Scaffold(
         containerColor = Color.Transparent,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             TopAppBar(
                 title = stringResourceCompat(R.string.settings),
                 modifier = Modifier
-                    .statusBarsPadding()
-                    .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top))
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
                     .background(settingsTopBarColor),
                 color = settingsTopBarColor,
                 navigationIcon = {
@@ -751,6 +842,7 @@ private fun SettingsScreen(
                     color = MiuixTheme.colorScheme.surfaceContainer,
                 ),
                 cornerRadius = CardDefaults.CornerRadius,
+                pressFeedbackType = PressFeedbackType.Tilt,
             ) {
                 Text(
                     text = stringResourceCompat(R.string.theme_mode),
@@ -774,6 +866,15 @@ private fun SettingsScreen(
                     summary = stringResourceCompat(R.string.liquid_glass_summary),
                     checked = glassEnabled,
                     onCheckedChange = onLiquidGlassChange,
+                )
+                SliderPreference(
+                    value = preferences.liquidGlassOpacity,
+                    onValueChange = onLiquidGlassOpacityChange,
+                    title = stringResourceCompat(R.string.liquid_glass_opacity),
+                    valueText = "${(preferences.liquidGlassOpacity * 100).toInt()}%",
+                    valueRange = MIN_LIQUID_GLASS_OPACITY..MAX_LIQUID_GLASS_OPACITY,
+                    steps = 7,
+                    showKeyPoints = false,
                 )
             }
             SmallTitle(text = stringResourceCompat(R.string.backgrounds))
@@ -825,7 +926,7 @@ private fun BackgroundPreferenceCard(
             color = MiuixTheme.colorScheme.surfaceContainer,
         ),
         cornerRadius = CardDefaults.CornerRadius,
-        pressFeedbackType = PressFeedbackType.Sink,
+        pressFeedbackType = PressFeedbackType.Tilt,
         showIndication = true,
         onClick = onClick,
     ) {
@@ -870,10 +971,10 @@ internal fun stringResourceCompat(id: Int, vararg args: Any): String =
     androidx.compose.ui.res.stringResource(id, *args)
 
 @Composable
-private fun homeGlassColor(): Color =
-    Color.White.copy(alpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.08f else 0.16f)
-
-private val HOME_PAGE_TOP_OFFSET = 36.dp
+private fun homeGlassColor(): Color {
+    val baseAlpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.08f else 0.16f
+    return Color.White.copy(alpha = baseAlpha * LocalLiquidGlassOpacity.current)
+}
 
 private fun formatBytes(bytes: Long): String = when {
     bytes >= 1024 * 1024 -> String.format(Locale.getDefault(), "%.1f MB", bytes / (1024f * 1024f))

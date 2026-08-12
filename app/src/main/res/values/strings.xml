@@ -20,6 +20,7 @@
     <string name="appearance">Appearance</string>
     <string name="liquid_glass">Liquid glass</string>
     <string name="liquid_glass_summary">Use Backdrop glass surfaces on the bookshelf and reader</string>
+    <string name="liquid_glass_opacity">Glass opacity</string>
     <string name="theme_mode">Theme</string>
     <string name="theme_system">System</string>
     <string name="theme_light">Light</string>
@@ -64,6 +65,9 @@
     <string name="no_bookmarks">No bookmarks yet</string>
     <string name="bookmark">Bookmark</string>
     <string name="edit_book_info">Edit book info</string>
+    <string name="change_cover">Change cover</string>
+    <string name="cover_updated">Book cover updated</string>
+    <string name="cover_update_failed">Could not update the book cover</string>
     <string name="title_label">Title</string>
     <string name="author_label">Author</string>
     <string name="save">Save</string>

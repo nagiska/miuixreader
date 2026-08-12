@@ -8,6 +8,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.viewModels
 import androidx.core.view.WindowCompat
@@ -46,6 +48,7 @@ class MainActivity : FragmentActivity() {
         // fresh launch (or onNewIntent) processes incoming files.
         if (savedInstanceState == null) processSharedIntent(intent)
         setContent {
+            val pendingCoverBookId = rememberSaveable { mutableStateOf<Long?>(null) }
             val bookImportLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.OpenMultipleDocuments(),
             ) { uris -> model.import(uris) }
@@ -55,6 +58,13 @@ class MainActivity : FragmentActivity() {
             val readerBackgroundLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.OpenDocument(),
             ) { uri -> uri?.let { model.importBackground(BackgroundTarget.READER, it) } }
+            val bookCoverLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.OpenDocument(),
+            ) { uri ->
+                val bookId = pendingCoverBookId.value
+                pendingCoverBookId.value = null
+                if (uri != null && bookId != null) model.replaceCover(bookId, uri)
+            }
             ReaderApp(
                 viewModel = model,
                 onImport = {
@@ -75,6 +85,10 @@ class MainActivity : FragmentActivity() {
                 },
                 onImportReaderBackground = {
                     readerBackgroundLauncher.launch(arrayOf("image/*"))
+                },
+                onImportBookCover = { book ->
+                    pendingCoverBookId.value = book.id
+                    bookCoverLauncher.launch(arrayOf("image/*"))
                 },
                 onEditBook = model::updateMetadata,
             )

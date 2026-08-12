@@ -12,25 +12,27 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
-import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -54,12 +56,13 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -68,6 +71,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -89,6 +94,7 @@ import io.github.nagiska.miuixreader.data.ReaderBackgroundMode
 import io.github.nagiska.miuixreader.data.ReaderFontFamily
 import io.github.nagiska.miuixreader.data.ReaderPreferences
 import io.github.nagiska.miuixreader.data.contrastTextColor
+import io.github.nagiska.miuixreader.ui.LocalLiquidGlassOpacity
 import io.github.nagiska.miuixreader.ui.stringResourceCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -104,7 +110,6 @@ import top.yukonga.miuix.kmp.basic.ColorPalette
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.SmallTopAppBar
 import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
@@ -244,11 +249,12 @@ fun ReaderChrome(
     val chromeColors = remember(
         preferences.readerBackgroundMode,
         preferences.readerBackgroundColor,
+        preferences.liquidGlassOpacity,
         systemBackground,
     ) {
         val glassAlpha = (
             if (systemBackground.luminance() < 0.5f) 0.08f else 0.18f
-            ) + 0.08f
+            ) * preferences.liquidGlassOpacity + 0.08f * preferences.liquidGlassOpacity
         val blendedGlass = Color(
             red = (glassAlpha + readerBackground.red * (1f - glassAlpha)).coerceIn(0f, 1f),
             green = (glassAlpha + readerBackground.green * (1f - glassAlpha)).coerceIn(0f, 1f),
@@ -296,9 +302,28 @@ fun ReaderChrome(
                     requireUnconsumed = false,
                     pass = PointerEventPass.Initial,
                 )
-                val up = waitForUpOrCancellation(pass = PointerEventPass.Final)
-                if (up == null) return@awaitEachGesture
+                val slop = viewConfiguration.touchSlop
+                var moved = 0f
+                var isTap = true
+                while (true) {
+                    val event = awaitPointerEvent(pass = PointerEventPass.Final)
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (change.changedToUp()) {
+                        isTap = !change.isConsumed
+                        break
+                    }
+                    if (change.isConsumed) {
+                        isTap = false
+                        break
+                    }
+                    moved += change.positionChange().getDistance()
+                    if (moved > slop) {
+                        isTap = false
+                        break
+                    }
+                }
                 if (
+                    isTap &&
                     down.position.y > topBarBottom &&
                     down.position.y < bottomBarTop
                 ) {
@@ -310,15 +335,18 @@ fun ReaderChrome(
         Modifier
     }
 
-    Scaffold(
-        containerColor = Color.Transparent,
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
-    ) { _ ->
-        Box(
-            Modifier
-                .fillMaxSize()
-                .then(dismissModifier),
-        ) {
+    CompositionLocalProvider(
+        LocalLiquidGlassOpacity provides preferences.liquidGlassOpacity,
+    ) {
+        Scaffold(
+            containerColor = Color.Transparent,
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        ) { _ ->
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .then(dismissModifier),
+            ) {
             ReaderTopBar(
                 visible = chrome.visible,
                 title = title,
@@ -416,17 +444,18 @@ fun ReaderChrome(
             onResultClick = onSearchResultClick,
             backProgress = sheetBackProgress,
         )
-        ReaderBookmarkSheet(
-            show = chrome.panel == ReaderPanel.BOOKMARKS,
-            bookmarks = bookmarks,
-            liquidGlassEnabled = preferences.liquidGlassEnabled,
-            backdrop = backdrop,
-            onDismiss = chrome::closePanel,
-            colors = chromeColors,
-            onBookmarkClick = onBookmarkClick,
-            onBookmarkDelete = onBookmarkDelete,
-            backProgress = sheetBackProgress,
-        )
+            ReaderBookmarkSheet(
+                show = chrome.panel == ReaderPanel.BOOKMARKS,
+                bookmarks = bookmarks,
+                liquidGlassEnabled = preferences.liquidGlassEnabled,
+                backdrop = backdrop,
+                onDismiss = chrome::closePanel,
+                colors = chromeColors,
+                onBookmarkClick = onBookmarkClick,
+                onBookmarkDelete = onBookmarkDelete,
+                backProgress = sheetBackProgress,
+            )
+        }
     }
 }
 
@@ -452,130 +481,109 @@ private fun ReaderTopBar(
     val typographyDescription = stringResourceCompat(R.string.typography)
     AnimatedVisibility(
         visible = visible,
+        modifier = Modifier.fillMaxWidth(),
         enter = readerEnter { -it } + fadeIn(animationSpec = folmeSpring(0.9f, 0.38f)),
         exit = readerExit { -it } + fadeOut(animationSpec = folmeSpring(0.9f, 0.38f)),
     ) {
         MiuixTheme(colors = colors) {
             CompositionLocalProvider(LocalContentColor provides colors.onBackground) {
+                val shape = RoundedCornerShape(CardDefaults.CornerRadius)
                 Box(
                     modifier = modifier
                         .fillMaxWidth()
-                        .graphicsLayer { translationY = -backProgress * size.height }
-                        .then(readerGlassModifier(preferences.liquidGlassEnabled, backdrop, glassColor, topShape()))
-                        .then(
-                            if (!preferences.liquidGlassEnabled) {
-                                Modifier.background(MiuixTheme.colorScheme.surface.copy(alpha = 0.96f))
-                            } else {
-                                Modifier
-                            },
-                        ),
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
                 ) {
-                    SmallTopAppBar(
-                        title = title,
-                        modifier = Modifier.windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Top)),
-                        color = Color.Transparent,
-                        navigationIcon = {
-                            GlassCircleButton(
-                                enabled = preferences.liquidGlassEnabled,
-                                backdrop = backdrop,
-                            ) {
-                                IconButton(onClick = onBack) {
-                                    Icon(MiuixIcons.Back, contentDescription = stringResourceCompat(R.string.back))
-                                }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .graphicsLayer { translationY = -backProgress * size.height }
+                            .then(
+                                readerGlassModifier(
+                                    preferences.liquidGlassEnabled,
+                                    backdrop,
+                                    glassColor,
+                                    shape,
+                                ),
+                            )
+                            .then(
+                                if (!preferences.liquidGlassEnabled) {
+                                    Modifier.clip(shape).background(
+                                        MiuixTheme.colorScheme.surface.copy(alpha = 0.96f),
+                                    )
+                                } else {
+                                    Modifier
+                                },
+                            )
+                            .padding(horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(onClick = onBack) {
+                            Icon(MiuixIcons.Back, contentDescription = stringResourceCompat(R.string.back))
+                        }
+                        BoxWithConstraints(
+                            modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            val titleUnits = remember(title) {
+                                title.sumOf { character ->
+                                    if (character.code > 0xFF) 1.0 else 0.56
+                                }.toFloat().coerceAtLeast(1f)
                             }
-                        },
-                        actions = {
-                            if (tocAvailable) {
-                                GlassCircleButton(
-                                    enabled = preferences.liquidGlassEnabled,
-                                    backdrop = backdrop,
-                                ) {
-                                    IconButton(onClick = onToc) {
-                                        Icon(
-                                            MiuixIcons.ListView,
-                                            contentDescription = stringResourceCompat(R.string.table_of_contents),
-                                        )
-                                    }
-                                }
+                            val density = LocalDensity.current.density
+                            val fontScale = LocalDensity.current.fontScale
+                            val fittedSize = (maxWidth.value / (titleUnits * density * fontScale))
+                                .coerceIn(10f, 17f).sp
+                            Text(
+                                text = title,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MiuixTheme.textStyles.title3.copy(
+                                    fontSize = fittedSize,
+                                    fontWeight = FontWeight.Medium,
+                                ),
+                            )
+                        }
+                        if (tocAvailable) {
+                            IconButton(onClick = onToc) {
+                                Icon(
+                                    MiuixIcons.ListView,
+                                    contentDescription = stringResourceCompat(R.string.table_of_contents),
+                                )
                             }
-                            if (searchAvailable) {
-                                GlassCircleButton(
-                                    enabled = preferences.liquidGlassEnabled,
-                                    backdrop = backdrop,
-                                ) {
-                                    IconButton(onClick = onSearch) {
-                                        Icon(
-                                            MiuixIcons.Search,
-                                            contentDescription = stringResourceCompat(R.string.search_in_book),
-                                        )
-                                    }
-                                }
+                        }
+                        if (searchAvailable) {
+                            IconButton(onClick = onSearch) {
+                                Icon(
+                                    MiuixIcons.Search,
+                                    contentDescription = stringResourceCompat(R.string.search_in_book),
+                                )
                             }
-                            if (supportsTypography) {
-                                GlassCircleButton(
-                                    enabled = preferences.liquidGlassEnabled,
-                                    backdrop = backdrop,
-                                ) {
-                                    IconButton(onClick = onTypography) {
-                                        Text(
-                                            text = "Aa",
-                                            modifier = Modifier.semantics {
-                                                contentDescription = typographyDescription
-                                            },
-                                            fontSize = 15.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MiuixTheme.colorScheme.onSurface,
-                                        )
-                                    }
-                                }
+                        }
+                        if (supportsTypography) {
+                            IconButton(onClick = onTypography) {
+                                Text(
+                                    text = "Aa",
+                                    modifier = Modifier.semantics {
+                                        contentDescription = typographyDescription
+                                    },
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MiuixTheme.colorScheme.onSurface,
+                                )
                             }
-                            if (supportsTypography) {
-                                GlassCircleButton(
-                                    enabled = preferences.liquidGlassEnabled,
-                                    backdrop = backdrop,
-                                ) {
-                                    IconButton(onClick = onBackground) {
-                                        Icon(
-                                            MiuixIcons.Background,
-                                            contentDescription = stringResourceCompat(R.string.reader_background),
-                                        )
-                                    }
-                                }
+                            IconButton(onClick = onBackground) {
+                                Icon(
+                                    MiuixIcons.Background,
+                                    contentDescription = stringResourceCompat(R.string.reader_background),
+                                )
                             }
-                        },
-                    )
+                        }
+                    }
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun GlassCircleButton(
-    enabled: Boolean,
-    backdrop: Backdrop,
-    content: @Composable () -> Unit,
-) {
-    if (enabled) {
-        val glassColor = readerGlassColor()
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .drawBackdrop(
-                    backdrop = backdrop,
-                    shape = { RoundedCornerShape(50) },
-                    effects = {
-                        vibrancy()
-                        blur(14.dp.toPx())
-                    },
-                    onDrawSurface = { drawRect(glassColor) },
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            content()
-        }
-    } else {
-        content()
     }
 }
 
@@ -678,7 +686,9 @@ private fun ReaderGlassSheet(
     val density = LocalDensity.current
     val dismissThreshold = with(density) { 120.dp.toPx() }
     val glassColor = readerGlassColor()
-    val panelGlassColor = glassColor.copy(alpha = (glassColor.alpha + 0.08f).coerceAtMost(0.45f))
+    val panelGlassColor = glassColor.copy(
+        alpha = (glassColor.alpha + 0.08f * LocalLiquidGlassOpacity.current).coerceAtMost(0.45f),
+    )
     val sheetShape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
 
     LaunchedEffect(show) {
@@ -693,49 +703,50 @@ private fun ReaderGlassSheet(
     ) {
         MiuixTheme(colors = colors) {
             CompositionLocalProvider(LocalContentColor provides colors.onBackground) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(show) {
-                            awaitEachGesture {
-                                val down = awaitFirstDown(
-                                    requireUnconsumed = false,
-                                    pass = PointerEventPass.Initial,
-                                )
-                                val slop = viewConfiguration.touchSlop
-                                var moved = 0f
-                                var isTap = true
-                                var up: PointerInputChange? = null
-                                while (true) {
-                                    val event = awaitPointerEvent(pass = PointerEventPass.Final)
-                                    val change = event.changes.firstOrNull { it.id == down.id }
-                                        ?: break
-                                    if (change.changedToUp()) {
-                                        up = change
-                                        break
-                                    }
-                                    if (!change.isConsumed) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(show) {
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(
+                                        requireUnconsumed = false,
+                                        pass = PointerEventPass.Initial,
+                                    )
+                                    val slop = viewConfiguration.touchSlop
+                                    var moved = 0f
+                                    var isTap = true
+                                    while (true) {
+                                        val event = awaitPointerEvent(pass = PointerEventPass.Final)
+                                        val change = event.changes.firstOrNull { it.id == down.id }
+                                            ?: break
+                                        if (change.changedToUp()) {
+                                            isTap = !change.isConsumed
+                                            break
+                                        }
+                                        if (change.isConsumed) {
+                                            isTap = false
+                                            break
+                                        }
                                         moved += change.positionChange().getDistance()
                                         if (moved > slop) {
-                                            // A drag, not a tap: do not dismiss.
                                             isTap = false
                                             break
                                         }
                                     }
+                                    if (isTap) onDismiss()
                                 }
-                                if (!isTap || up == null) return@awaitEachGesture
-                                val aboveSheet = down.position.y < size.height - sheetHeight
-                                if (aboveSheet) {
-                                    onDismiss()
-                                }
-                            }
-                        },
-                    contentAlignment = Alignment.BottomCenter,
-                ) {
+                            },
+                    )
                     Box(
                         modifier = Modifier
+                            .align(Alignment.BottomCenter)
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp)
+                            .windowInsetsPadding(
+                                WindowInsets.navigationBars.union(WindowInsets.ime)
+                                    .only(WindowInsetsSides.Bottom),
+                            )
                             .graphicsLayer { translationY = offsetY + backProgress * sheetHeight },
                     ) {
                         Column(
@@ -754,7 +765,6 @@ private fun ReaderGlassSheet(
                                         Modifier.clip(sheetShape).background(MiuixTheme.colorScheme.background)
                                     },
                                 )
-                                .navigationBarsPadding()
                                 .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
                         ) {
                             Box(
@@ -982,7 +992,7 @@ private fun ReaderBackgroundSheet(
                         },
                     colors = CardDefaults.defaultColors(color = Color.Transparent),
                     cornerRadius = CardDefaults.CornerRadius,
-                    pressFeedbackType = PressFeedbackType.Sink,
+                    pressFeedbackType = PressFeedbackType.Tilt,
                     showIndication = true,
                     holdDownState = imageSelected,
                     onClick = onUseImage,
@@ -1151,11 +1161,25 @@ private fun ReaderSearchSheet(
     backProgress: Float = 0f,
 ) {
     val state = remember { TextFieldState() }
+    val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     var query by remember { mutableStateOf("") }
+    val dismissSearch = {
+        keyboardController?.hide()
+        focusManager.clearFocus(force = true)
+        onDismiss()
+    }
     LaunchedEffect(show) {
-        if (!show) {
+        if (show) {
+            delay(120)
+            focusRequester.requestFocus()
+            keyboardController?.show()
+        } else {
             query = ""
             state.edit { replace(0, length, "") }
+            keyboardController?.hide()
+            focusManager.clearFocus(force = true)
         }
     }
     LaunchedEffect(state) {
@@ -1172,12 +1196,12 @@ private fun ReaderSearchSheet(
         liquidGlassEnabled = liquidGlassEnabled,
         backdrop = backdrop,
         colors = colors,
-        onDismiss = onDismiss,
+        onDismiss = dismissSearch,
         backProgress = backProgress,
     ) {
         TextField(
             state = state,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
             label = stringResourceCompat(R.string.search_hint_in_book),
         )
         Spacer(Modifier.height(8.dp))
@@ -1207,7 +1231,11 @@ private fun ReaderSearchSheet(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onResultClick(result) }
+                            .clickable {
+                                keyboardController?.hide()
+                                focusManager.clearFocus(force = true)
+                                onResultClick(result)
+                            }
                             .padding(vertical = 10.dp),
                     ) {
                         Text(
@@ -1332,8 +1360,6 @@ private fun BackgroundSwatch(
     }
 }
 
-private fun topShape() = RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp)
-
 private fun readerEnter(offset: (Int) -> Int): EnterTransition =
     slideInVertically(animationSpec = folmeSpring(0.9f, 0.38f), initialOffsetY = offset)
 
@@ -1361,8 +1387,10 @@ private fun readerGlassModifier(
 }
 
 @Composable
-private fun readerGlassColor(): Color =
-    Color.White.copy(alpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.08f else 0.18f)
+private fun readerGlassColor(): Color {
+    val baseAlpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.08f else 0.18f
+    return Color.White.copy(alpha = baseAlpha * LocalLiquidGlassOpacity.current)
+}
 
 private const val CHROME_EXIT_MILLIS = 450L
 

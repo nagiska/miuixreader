@@ -3,6 +3,8 @@ package io.github.nagiska.miuixreader.data
 import android.content.ContentResolver
 import android.content.Context
 import android.database.Cursor
+import android.graphics.Bitmap
+import android.graphics.ImageDecoder
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Xml
@@ -152,6 +154,50 @@ class BookRepository(
             dao.updateMetadata(bookId, sanitized.first, sanitized.second)
             true
         }
+
+    suspend fun replaceCover(bookId: Long, uri: Uri): Boolean = withContext(Dispatchers.IO) {
+        val book = dao.getById(bookId) ?: return@withContext false
+        val fileName = "book-$bookId-${UUID.randomUUID()}.webp"
+        val destination = File(coversDir, fileName)
+        val temporary = File(coversDir, "$fileName.tmp")
+        try {
+            val source = ImageDecoder.createSource(resolver, uri)
+            val bitmap = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                val width = info.size.width
+                val height = info.size.height
+                require(width in 1..MAX_COVER_SOURCE_DIMENSION)
+                require(height in 1..MAX_COVER_SOURCE_DIMENSION)
+                val scale = minOf(1f, MAX_REPLACEMENT_COVER_DIMENSION / maxOf(width, height).toFloat())
+                decoder.setTargetSize(
+                    maxOf(1, (width * scale).toInt()),
+                    maxOf(1, (height * scale).toInt()),
+                )
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+            try {
+                temporary.outputStream().use { output ->
+                    check(bitmap.compress(Bitmap.CompressFormat.WEBP_LOSSY, 88, output))
+                }
+            } finally {
+                bitmap.recycle()
+            }
+            if (!temporary.renameTo(destination)) {
+                temporary.copyTo(destination, overwrite = true)
+                temporary.delete()
+            }
+            check(dao.updateCoverPath(bookId, destination.absolutePath) == 1)
+            book.coverPath
+                ?.takeUnless { it == destination.absolutePath }
+                ?.let(::File)
+                ?.delete()
+            true
+        } catch (error: Exception) {
+            temporary.delete()
+            destination.delete()
+            if (error is CancellationException) throw error
+            false
+        }
+    }
 
     private fun queryMetadata(uri: Uri): SourceMetadata {
         var name = uri.lastPathSegment?.substringAfterLast('/') ?: "Imported book"
@@ -355,6 +401,8 @@ class BookRepository(
         private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "gif")
         private const val MAX_METADATA_BYTES = 2 * 1024 * 1024
         private const val MAX_COVER_BYTES = 10L * 1024L * 1024L
+        private const val MAX_COVER_SOURCE_DIMENSION = 100_000
+        private const val MAX_REPLACEMENT_COVER_DIMENSION = 1_600
         private const val MAX_ORIGINAL_NAME_LENGTH = 1_000
     }
 }

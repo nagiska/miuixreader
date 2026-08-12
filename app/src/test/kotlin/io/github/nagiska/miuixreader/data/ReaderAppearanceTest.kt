@@ -29,4 +29,11 @@ class ReaderAppearanceTest {
     fun darkImageKeepsMinimumScrim() {
         assertEquals(MIN_IMAGE_SCRIM, recommendedScrimAlpha(0.05))
     }
+
+    @Test
+    fun glassOpacityIsClamped() {
+        assertEquals(MIN_LIQUID_GLASS_OPACITY, clampLiquidGlassOpacity(0f))
+        assertEquals(0.65f, clampLiquidGlassOpacity(0.65f))
+        assertEquals(MAX_LIQUID_GLASS_OPACITY, clampLiquidGlassOpacity(2f))
+    }
 }
