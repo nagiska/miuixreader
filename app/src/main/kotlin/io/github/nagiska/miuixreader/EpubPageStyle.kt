@@ -1,5 +1,7 @@
 package io.github.nagiska.miuixreader
 
+import io.github.nagiska.miuixreader.data.MIN_IMAGE_SCRIM
+import io.github.nagiska.miuixreader.data.MAX_IMAGE_SCRIM
 import io.github.nagiska.miuixreader.data.ReaderBackgroundMode
 import io.github.nagiska.miuixreader.data.ReaderPreferences
 import io.github.nagiska.miuixreader.data.contrastTextColor
@@ -19,24 +21,29 @@ internal fun buildEpubPageStyleScript(
             "s.textContent=${css.toJavaScriptString()};})();"
     }
 
+    val hasImage = imageDataUri != null &&
+        preferences.readerBackgroundMode == ReaderBackgroundMode.IMAGE
     val background = when (preferences.readerBackgroundMode) {
         ReaderBackgroundMode.FOLLOW_THEME -> error("Follow-theme style is handled above")
         ReaderBackgroundMode.COLOR -> preferences.readerBackgroundColor
-        ReaderBackgroundMode.IMAGE -> 0xFF000000.toInt()
+        // Without a loadable image, fall back to a readable light page
+        // instead of a black void.
+        ReaderBackgroundMode.IMAGE -> if (hasImage) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
     }
     val text = when (preferences.readerBackgroundMode) {
-        ReaderBackgroundMode.IMAGE -> 0xFFFFFFFF.toInt()
+        ReaderBackgroundMode.IMAGE -> if (hasImage) 0xFFFFFFFF.toInt() else 0xFF000000.toInt()
         else -> contrastTextColor(background)
     }
-    val imageCss = imageDataUri
-        ?.takeIf { preferences.readerBackgroundMode == ReaderBackgroundMode.IMAGE }
-        ?.let { uri ->
-            val alpha = preferences.readerBackgroundScrim.coerceIn(0f, 0.9f)
-            "background-image:url('$uri')!important;background-color:rgba(0,0,0,$alpha)!important;" +
-                "background-blend-mode:multiply!important;background-size:cover!important;" +
-                "background-position:center!important;"
-        }
-        .orEmpty()
+    val imageCss = if (hasImage) {
+        val alpha = preferences.readerBackgroundScrim.coerceIn(MIN_IMAGE_SCRIM, MAX_IMAGE_SCRIM)
+        // The scrim rides in a gradient layer above the photo (a plain
+        // background-color sits under the image and never shows).
+        "background-image:linear-gradient(rgba(0,0,0,$alpha),rgba(0,0,0,$alpha))," +
+            "url('$imageDataUri')!important;background-size:cover!important;" +
+            "background-position:center!important;"
+    } else {
+        ""
+    }
     val css = buildString {
         append("html{background-color:")
         append(background.toCssColor())

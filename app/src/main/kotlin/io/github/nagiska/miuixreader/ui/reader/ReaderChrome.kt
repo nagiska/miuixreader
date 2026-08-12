@@ -92,6 +92,8 @@ import io.github.nagiska.miuixreader.R
 import io.github.nagiska.miuixreader.data.BookmarkEntity
 import io.github.nagiska.miuixreader.data.MIN_FONT_SCALE
 import io.github.nagiska.miuixreader.data.MAX_FONT_SCALE
+import io.github.nagiska.miuixreader.data.MAX_IMAGE_SCRIM
+import io.github.nagiska.miuixreader.data.MIN_IMAGE_SCRIM
 import io.github.nagiska.miuixreader.data.ReaderBackgroundMode
 import io.github.nagiska.miuixreader.data.ReaderFontFamily
 import io.github.nagiska.miuixreader.data.ReaderPreferences
@@ -210,6 +212,7 @@ fun ReaderChrome(
     onBackgroundImage: () -> Unit,
     onImportBackground: () -> Unit,
     onClearBackground: () -> Unit,
+    onBackgroundScrimChange: (Float) -> Unit = {},
     autoHideEnabled: Boolean = true,
     onVisibilityChanged: (Boolean) -> Unit = {},
     onSeekPage: (Int) -> Unit = {},
@@ -408,6 +411,7 @@ fun ReaderChrome(
             onFollowTheme = onBackgroundFollowTheme,
             onColorChange = onBackgroundColorChange,
             onUseImage = onBackgroundImage,
+            onScrimChange = onBackgroundScrimChange,
             onImport = onImportBackground,
             onClearImage = onClearBackground,
         )
@@ -898,6 +902,7 @@ private fun ReaderBackgroundSheet(
     onFollowTheme: () -> Unit,
     onColorChange: (Int) -> Unit,
     onUseImage: () -> Unit,
+    onScrimChange: (Float) -> Unit,
     onImport: () -> Unit,
     onClearImage: () -> Unit,
 ) {
@@ -1018,6 +1023,17 @@ private fun ReaderBackgroundSheet(
                         )
                     }
                 }
+            }
+            if (imagePath != null) {
+                SliderPreference(
+                    value = imageScrim,
+                    onValueChange = onScrimChange,
+                    title = stringResourceCompat(R.string.background_scrim),
+                    valueText = "${(imageScrim * 100).toInt()}%",
+                    valueRange = MIN_IMAGE_SCRIM..MAX_IMAGE_SCRIM,
+                    steps = 4,
+                    showKeyPoints = false,
+                )
             }
         }
     }

@@ -32,7 +32,7 @@
     <string name="background_solid">已选择纯色背景</string>
     <string name="restore_default">恢复默认</string>
     <string name="background_imported">背景图片已导入</string>
-    <string name="background_import_failed">无法导入这张图片</string>
+    <string name="background_import_failed">无法将这张图片用作背景</string>
     <string name="typography">字体排版</string>
     <string name="font_family">字体</string>
     <string name="font_original">书籍默认</string>
@@ -63,6 +63,7 @@
     <string name="bookmark_current_page">添加或移除当前页书签</string>
     <string name="no_bookmarks">暂无书签</string>
     <string name="bookmark">书签</string>
+    <string name="background_scrim">背景遮罩</string>
     <string name="edit_book_info">编辑书籍信息</string>
     <string name="change_cover">更换封面</string>
     <string name="cover_updated">书籍封面已更新</string>

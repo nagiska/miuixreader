@@ -175,7 +175,14 @@ class ReaderActivity : FragmentActivity() {
     ) { uri ->
         if (uri != null) {
             lifecycleScope.launch {
-                readerSettings.importBackground(BackgroundTarget.READER, uri)
+                val success = readerSettings.importBackground(BackgroundTarget.READER, uri)
+                if (!success) {
+                    android.widget.Toast.makeText(
+                        this@ReaderActivity,
+                        getString(R.string.background_import_failed),
+                        android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                }
             }
         }
     }
@@ -425,6 +432,9 @@ class ReaderActivity : FragmentActivity() {
                         onBackgroundImage = { updateBackgroundMode(ReaderBackgroundMode.IMAGE) },
                         onImportBackground = { backgroundLauncher.launch(arrayOf("image/*")) },
                         onClearBackground = { clearReaderBackground() },
+                        onBackgroundScrimChange = { scrim ->
+                            lifecycleScope.launch { readerSettings.setReaderImageScrim(scrim) }
+                        },
                         autoHideEnabled = !touchExplorationEnabled,
                         onSeekPage = ::seekToPage,
                         tableOfContents = publication?.tableOfContents.orEmpty(),
@@ -821,6 +831,9 @@ class ReaderActivity : FragmentActivity() {
                     onBackgroundImage = { updateBackgroundMode(ReaderBackgroundMode.IMAGE) },
                     onImportBackground = { backgroundLauncher.launch(arrayOf("image/*")) },
                     onClearBackground = ::clearReaderBackground,
+                    onBackgroundScrimChange = { scrim ->
+                        lifecycleScope.launch { readerSettings.setReaderImageScrim(scrim) }
+                    },
                 )
             }
         }
@@ -1032,7 +1045,20 @@ class ReaderActivity : FragmentActivity() {
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
-            // A page transition can remove the WebView before the style script runs.
+            // The data-URI script can exceed the binder transaction limit or a
+            // page transition can remove the WebView. Retry without the image:
+            // the no-image style falls back to a readable light page instead of
+            // leaving the forced-dark theme on a black void.
+            val fallbackScript = buildEpubPageStyleScript(
+                preferences = preferences,
+                imageDataUri = null,
+                fallbackDark = isDark(preferences.themeMode),
+            )
+            try {
+                epub.evaluateJavascript(fallbackScript)
+            } catch (_: Exception) {
+                // Even the fallback failed; the page keeps its default style.
+            }
         }
     }
 
@@ -1564,21 +1590,31 @@ private fun TextReaderScreen(
 
 @Composable
 private fun TextPageBackground(preferences: ReaderPreferences) {
+    var imageFailed by remember { mutableStateOf(false) }
     val backgroundColor = when (preferences.readerBackgroundMode) {
         ReaderBackgroundMode.FOLLOW_THEME -> MiuixTheme.colorScheme.background
         ReaderBackgroundMode.COLOR -> Color(preferences.readerBackgroundColor)
-        ReaderBackgroundMode.IMAGE -> Color.Black
+        // Fall back to a readable light surface instead of a black void when
+        // the custom image is missing or fails to load.
+        ReaderBackgroundMode.IMAGE ->
+            if (preferences.readerBackgroundPath != null && !imageFailed) {
+                Color.Black
+            } else {
+                MiuixTheme.colorScheme.background
+            }
     }
     Box(Modifier.fillMaxSize().background(backgroundColor)) {
         if (
             preferences.readerBackgroundMode == ReaderBackgroundMode.IMAGE &&
-            preferences.readerBackgroundPath != null
+            preferences.readerBackgroundPath != null &&
+            !imageFailed
         ) {
             AsyncImage(
                 model = preferences.readerBackgroundPath,
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
+                onError = { imageFailed = true },
             )
             Box(
                 Modifier
@@ -1594,7 +1630,14 @@ private fun readerTextColor(preferences: ReaderPreferences): Color =
     when (preferences.readerBackgroundMode) {
         ReaderBackgroundMode.FOLLOW_THEME -> MiuixTheme.colorScheme.onBackground
         ReaderBackgroundMode.COLOR -> Color(contrastTextColor(preferences.readerBackgroundColor))
-        ReaderBackgroundMode.IMAGE -> Color.White
+        // White text only over a loaded image; without it the light fallback
+        // background needs dark text to stay readable.
+        ReaderBackgroundMode.IMAGE ->
+            if (preferences.readerBackgroundPath != null) {
+                Color.White
+            } else {
+                MiuixTheme.colorScheme.onBackground
+            }
     }
 
 private fun ReaderFontFamily.toComposeFontFamily(): ComposeFontFamily = when (this) {

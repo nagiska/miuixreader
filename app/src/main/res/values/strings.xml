@@ -33,7 +33,7 @@
     <string name="background_solid">Solid color selected</string>
     <string name="restore_default">Restore default</string>
     <string name="background_imported">Background imported</string>
-    <string name="background_import_failed">Could not import that image</string>
+    <string name="background_import_failed">Could not use this image as the background</string>
     <string name="typography">Typography</string>
     <string name="font_family">Font family</string>
     <string name="font_original">Book default</string>
@@ -64,6 +64,7 @@
     <string name="bookmark_current_page">Add or remove a bookmark for the current page</string>
     <string name="no_bookmarks">No bookmarks yet</string>
     <string name="bookmark">Bookmark</string>
+    <string name="background_scrim">Background scrim</string>
     <string name="edit_book_info">Edit book info</string>
     <string name="change_cover">Change cover</string>
     <string name="cover_updated">Book cover updated</string>

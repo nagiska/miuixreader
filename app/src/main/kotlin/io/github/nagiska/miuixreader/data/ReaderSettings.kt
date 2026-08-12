@@ -90,6 +90,12 @@ class ReaderSettings(private val context: Context) {
         }
     }
 
+    suspend fun setReaderImageScrim(scrim: Float) {
+        context.readerSettingsDataStore.edit {
+            it[readerBackgroundScrimKey] = scrim.coerceIn(MIN_IMAGE_SCRIM, MAX_IMAGE_SCRIM)
+        }
+    }
+
     suspend fun setThemeMode(mode: AppThemeMode) {
         context.readerSettingsDataStore.edit { it[themeModeKey] = mode.name }
     }
@@ -251,13 +257,13 @@ class ReaderSettings(private val context: Context) {
     private val BackgroundTarget.compressionQuality: Int
         get() = when (this) {
             BackgroundTarget.BOOKSHELF -> 84
-            BackgroundTarget.READER -> 78
+            BackgroundTarget.READER -> 72
         }
 
     companion object {
         private const val BACKGROUND_DIRECTORY = "backgrounds"
         private const val MAX_BOOKSHELF_BACKGROUND_DIMENSION = 1920
-        private const val MAX_READER_BACKGROUND_DIMENSION = 1280
+        private const val MAX_READER_BACKGROUND_DIMENSION = 960
         private const val MAX_SOURCE_DIMENSION = 100_000
         private const val LUMINANCE_SAMPLE_SIZE = 64
     }
