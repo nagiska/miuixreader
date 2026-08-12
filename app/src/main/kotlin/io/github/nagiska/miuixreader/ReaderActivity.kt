@@ -1590,31 +1590,23 @@ private fun TextReaderScreen(
 
 @Composable
 private fun TextPageBackground(preferences: ReaderPreferences) {
-    var imageFailed by remember { mutableStateOf(false) }
     val backgroundColor = when (preferences.readerBackgroundMode) {
         ReaderBackgroundMode.FOLLOW_THEME -> MiuixTheme.colorScheme.background
         ReaderBackgroundMode.COLOR -> Color(preferences.readerBackgroundColor)
-        // Fall back to a readable light surface instead of a black void when
-        // the custom image is missing or fails to load.
-        ReaderBackgroundMode.IMAGE ->
-            if (preferences.readerBackgroundPath != null && !imageFailed) {
-                Color.Black
-            } else {
-                MiuixTheme.colorScheme.background
-            }
+        // Black with white text stays readable even when the image fails
+        // to load or is missing.
+        ReaderBackgroundMode.IMAGE -> Color.Black
     }
     Box(Modifier.fillMaxSize().background(backgroundColor)) {
         if (
             preferences.readerBackgroundMode == ReaderBackgroundMode.IMAGE &&
-            preferences.readerBackgroundPath != null &&
-            !imageFailed
+            preferences.readerBackgroundPath != null
         ) {
             AsyncImage(
                 model = preferences.readerBackgroundPath,
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
-                onError = { imageFailed = true },
             )
             Box(
                 Modifier
@@ -1630,14 +1622,9 @@ private fun readerTextColor(preferences: ReaderPreferences): Color =
     when (preferences.readerBackgroundMode) {
         ReaderBackgroundMode.FOLLOW_THEME -> MiuixTheme.colorScheme.onBackground
         ReaderBackgroundMode.COLOR -> Color(contrastTextColor(preferences.readerBackgroundColor))
-        // White text only over a loaded image; without it the light fallback
-        // background needs dark text to stay readable.
-        ReaderBackgroundMode.IMAGE ->
-            if (preferences.readerBackgroundPath != null) {
-                Color.White
-            } else {
-                MiuixTheme.colorScheme.onBackground
-            }
+        // White text on the (possibly image-less) black IMAGE surface stays
+        // readable in every state.
+        ReaderBackgroundMode.IMAGE -> Color.White
     }
 
 private fun ReaderFontFamily.toComposeFontFamily(): ComposeFontFamily = when (this) {

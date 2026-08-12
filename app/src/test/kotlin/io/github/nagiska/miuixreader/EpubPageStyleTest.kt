@@ -24,14 +24,14 @@ class EpubPageStyleTest {
         val script = buildEpubPageStyleScript(
             preferences = ReaderPreferences(
                 readerBackgroundMode = ReaderBackgroundMode.IMAGE,
-                readerBackgroundScrim = 0.7f,
+                readerBackgroundScrim = 0.45f,
             ),
             imageDataUri = "data:image/webp;base64,AAAA",
             fallbackDark = false,
         )
 
         assertTrue(script.contains("background-image:url('data:image/webp;base64,AAAA')"))
-        assertTrue(script.contains("rgba(0,0,0,0.7)"))
+        assertTrue(script.contains("rgba(0,0,0,0.45)"))
         assertTrue(script.contains("color:#FFFFFF"))
     }
 

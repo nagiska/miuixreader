@@ -38,8 +38,7 @@ internal fun buildEpubPageStyleScript(
         val alpha = preferences.readerBackgroundScrim.coerceIn(MIN_IMAGE_SCRIM, MAX_IMAGE_SCRIM)
         // The scrim rides in a gradient layer above the photo (a plain
         // background-color sits under the image and never shows).
-        "background-image:linear-gradient(rgba(0,0,0,$alpha),rgba(0,0,0,$alpha))," +
-            "url('$imageDataUri')!important;background-size:cover!important;" +
+        "background-image:linear-gradient(rgba(0,0,0,$alpha),rgba(0,0,0,$alpha))," +            "url('$imageDataUri')!important;background-size:cover!important;" +
             "background-position:center!important;"
     } else {
         ""
