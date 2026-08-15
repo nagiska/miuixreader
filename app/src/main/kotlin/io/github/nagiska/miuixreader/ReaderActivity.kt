@@ -1268,6 +1268,7 @@ private fun TextReaderScreen(
     onBackgroundImage: () -> Unit,
     onImportBackground: () -> Unit,
     onClearBackground: () -> Unit,
+    onBackgroundScrimChange: (Float) -> Unit,
 ) {
     val chunks = remember(content) { chunkText(content) }
     val chunkStartOffsets = remember(chunks) {
@@ -1568,6 +1569,7 @@ private fun TextReaderScreen(
             onBackgroundImage = onBackgroundImage,
             onImportBackground = onImportBackground,
             onClearBackground = onClearBackground,
+            onBackgroundScrimChange = onBackgroundScrimChange,
             autoHideEnabled = autoHideEnabled,
             onSeekFraction = seekTo,
             searchResults = searchResults,
