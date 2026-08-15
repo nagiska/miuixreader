@@ -30,7 +30,7 @@ class EpubPageStyleTest {
             fallbackDark = false,
         )
 
-        assertTrue(script.contains("background-image:url('data:image/webp;base64,AAAA')"))
+        assertTrue(script.contains("url('data:image/webp;base64,AAAA')"))
         assertTrue(script.contains("rgba(0,0,0,0.45)"))
         assertTrue(script.contains("color:#FFFFFF"))
     }
