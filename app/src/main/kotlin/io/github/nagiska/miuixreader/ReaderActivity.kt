@@ -1,9 +1,12 @@
 package io.github.nagiska.miuixreader
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -58,6 +61,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -73,6 +77,7 @@ import io.github.nagiska.miuixreader.data.BookmarkEntity
 import io.github.nagiska.miuixreader.data.BookmarkKind
 import io.github.nagiska.miuixreader.data.ReaderBackgroundMode
 import io.github.nagiska.miuixreader.data.ReaderFontFamily
+import io.github.nagiska.miuixreader.data.NarrationEngine
 import io.github.nagiska.miuixreader.data.ReaderPreferences
 import io.github.nagiska.miuixreader.data.bookFormat
 import io.github.nagiska.miuixreader.data.contrastTextColor
@@ -85,6 +90,18 @@ import io.github.nagiska.miuixreader.ui.reader.ReaderSearchResult
 import io.github.nagiska.miuixreader.ui.reader.flattenToc
 import io.github.nagiska.miuixreader.ui.reader.pageToProgression
 import io.github.nagiska.miuixreader.ui.theme.ReaderTheme
+import io.github.nagiska.miuixreader.tts.GsvEndpointStatus
+import io.github.nagiska.miuixreader.tts.GsvLocalClient
+import io.github.nagiska.miuixreader.tts.NarrationAnchor
+import io.github.nagiska.miuixreader.tts.NarrationPhase
+import io.github.nagiska.miuixreader.tts.NarrationPlaybackState
+import io.github.nagiska.miuixreader.tts.NarrationService
+import io.github.nagiska.miuixreader.tts.NarrationSession
+import io.github.nagiska.miuixreader.tts.NarrationSegment
+import io.github.nagiska.miuixreader.tts.PublicationNarrationBlock
+import io.github.nagiska.miuixreader.tts.buildNarrationTextChunks
+import io.github.nagiska.miuixreader.tts.buildPublicationNarrationSegments
+import io.github.nagiska.miuixreader.tts.buildTxtNarrationSegments
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -164,6 +181,12 @@ class ReaderActivity : FragmentActivity() {
     private var lastBackdropRefreshAt = 0L
     private var cachedBackgroundSignature: String? = null
     private var cachedBackgroundDataUri: String? = null
+    private var narrationState by mutableStateOf(NarrationPlaybackState())
+    private var gsvStatus by mutableStateOf<GsvEndpointStatus?>(null)
+    private var narrationBuildJob: Job? = null
+    private var gsvStatusJob: Job? = null
+    private var pendingNarrationStart: (() -> Unit)? = null
+    private var lastNarrationLocatorJson: String? = null
 
     private val readerSettings get() = (application as ReaderApplication).settings
     private val touchExplorationEnabled: Boolean
@@ -187,6 +210,13 @@ class ReaderActivity : FragmentActivity() {
         }
     }
 
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
+        pendingNarrationStart?.invoke()
+        pendingNarrationStart = null
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(null)
         enableEdgeToEdge()
@@ -197,6 +227,11 @@ class ReaderActivity : FragmentActivity() {
                     updateSystemBars(preferences)
                     latestPreferences = preferences
                 }
+            }
+        }
+        lifecycleScope.launch {
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                NarrationService.currentState.collectLatest(::applyNarrationState)
             }
         }
         lifecycleScope.launch {
@@ -212,6 +247,7 @@ class ReaderActivity : FragmentActivity() {
                 null
             }
             currentBookId = book?.id ?: -1L
+            applyNarrationState(NarrationService.currentState.value)
             if (book == null || !File(book.path).isFile) {
                 showError(getString(R.string.reader_book_missing))
                 return@launch
@@ -229,6 +265,207 @@ class ReaderActivity : FragmentActivity() {
                 showPublicationReader(book)
             }
         }
+    }
+
+    private fun applyNarrationState(state: NarrationPlaybackState) {
+        if (state.bookId != currentBookId) {
+            narrationState = NarrationPlaybackState()
+            clearNarrationHighlight()
+            return
+        }
+        narrationState = state
+        val anchor = state.anchor as? NarrationAnchor.Publication
+        if (anchor == null || state.phase in setOf(NarrationPhase.IDLE, NarrationPhase.ERROR)) {
+            clearNarrationHighlight()
+            return
+        }
+        val nav = navigator ?: return
+        if (anchor.locatorJson == lastNarrationLocatorJson) return
+        val locator = runCatching { Locator.fromJSON(JSONObject(anchor.locatorJson)) }.getOrNull() ?: return
+        nav.go(locator, animated = false)
+        lastNarrationLocatorJson = anchor.locatorJson
+        val decorable = nav as? DecorableNavigator ?: return
+        if (!decorable.supportsDecorationStyle(Decoration.Style.Highlight::class)) return
+        lifecycleScope.launch {
+            decorable.applyDecorations(
+                listOf(
+                    Decoration(
+                        id = "narration-current",
+                        locator = locator,
+                        style = Decoration.Style.Highlight(tint = 0x4DFFB300),
+                    ),
+                ),
+                NARRATION_DECORATION_GROUP,
+            )
+        }
+    }
+
+    private fun clearNarrationHighlight() {
+        if (lastNarrationLocatorJson == null) return
+        lastNarrationLocatorJson = null
+        val decorable = navigator as? DecorableNavigator ?: return
+        lifecycleScope.launch {
+            runCatching { decorable.applyDecorations(emptyList(), NARRATION_DECORATION_GROUP) }
+        }
+    }
+
+    private fun toggleNarration(onStart: () -> Unit) {
+        when (narrationState.phase) {
+            NarrationPhase.PREPARING, NarrationPhase.BUFFERING, NarrationPhase.PLAYING ->
+                NarrationService.pause(this)
+            NarrationPhase.PAUSED -> NarrationService.resume(this)
+            NarrationPhase.IDLE, NarrationPhase.ERROR -> startWithNotificationPermission(onStart)
+        }
+    }
+
+    private fun startWithNotificationPermission(onStart: () -> Unit) {
+        if (
+            Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingNarrationStart = onStart
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            onStart()
+        }
+    }
+
+    private fun startPublicationNarration(title: String) {
+        narrationBuildJob?.cancel()
+        if (narrationState.isActive) NarrationService.stop(this)
+        narrationState = NarrationPlaybackState(
+            bookId = currentBookId,
+            title = title,
+            phase = NarrationPhase.PREPARING,
+        )
+        narrationBuildJob = lifecycleScope.launch {
+            try {
+                val pub = publication ?: error(getString(R.string.narration_no_text))
+                val publicationContent = pub.content() ?: error(getString(R.string.narration_no_text))
+                val current = navigator?.currentLocator?.value
+                val blocks = withContext(Dispatchers.Default) {
+                    publicationContent.elements().mapNotNull { element ->
+                        val textual = element as? Content.TextualElement ?: return@mapNotNull null
+                        textual.text?.takeIf(String::isNotBlank)?.let { text ->
+                            PublicationNarrationBlock(
+                                text = text,
+                                locatorJson = textual.locator.toJSON().toString(),
+                                href = textual.locator.href.toString(),
+                                progression = textual.locator.locations.progression,
+                            )
+                        }
+                    }.toList()
+                }
+                val segments = withContext(Dispatchers.Default) {
+                    buildPublicationNarrationSegments(
+                        blocks,
+                        current?.href?.toString(),
+                        current?.locations?.progression,
+                    )
+                }
+                startNarrationSession(title, segments)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                narrationState = narrationState.copy(
+                    phase = NarrationPhase.ERROR,
+                    errorMessage = error.message ?: getString(R.string.narration_no_text),
+                )
+            }
+        }
+    }
+
+    private fun startTextNarration(title: String, content: String, startOffset: Int) {
+        narrationBuildJob?.cancel()
+        if (narrationState.isActive) NarrationService.stop(this)
+        narrationState = NarrationPlaybackState(
+            bookId = currentBookId,
+            title = title,
+            phase = NarrationPhase.PREPARING,
+        )
+        narrationBuildJob = lifecycleScope.launch {
+            try {
+                val segments = withContext(Dispatchers.Default) {
+                    val chunks = buildNarrationTextChunks(content)
+                    buildTxtNarrationSegments(content, chunks, startOffset.coerceIn(0, content.length))
+                }
+                startNarrationSession(title, segments)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                narrationState = narrationState.copy(
+                    phase = NarrationPhase.ERROR,
+                    errorMessage = error.message ?: getString(R.string.narration_no_text),
+                )
+            }
+        }
+    }
+
+    private fun startNarrationSession(title: String, segments: List<NarrationSegment>) {
+        if (segments.isEmpty()) {
+            narrationState = narrationState.copy(
+                phase = NarrationPhase.ERROR,
+                errorMessage = getString(R.string.narration_no_text),
+            )
+            return
+        }
+        NarrationService.start(
+            this,
+            NarrationSession(
+                bookId = currentBookId,
+                title = title,
+                engine = latestPreferences.narrationEngine,
+                rate = latestPreferences.narrationRate,
+                gsvPort = latestPreferences.gsvPort,
+                segments = segments,
+            ),
+        )
+    }
+
+    private fun stopNarrationIfActive() {
+        narrationBuildJob?.cancel()
+        narrationBuildJob = null
+        if (narrationState.isActive) {
+            NarrationService.stop(this)
+            narrationState = NarrationPlaybackState()
+            clearNarrationHighlight()
+        }
+    }
+
+    private fun refreshGsvStatus() {
+        gsvStatusJob?.cancel()
+        gsvStatus = null
+        val port = latestPreferences.gsvPort
+        val rate = latestPreferences.narrationRate
+        gsvStatusJob = lifecycleScope.launch {
+            val client = GsvLocalClient(port, rate)
+            gsvStatus = try {
+                client.checkStatus()
+            } finally {
+                client.close()
+            }
+        }
+    }
+
+    private fun openGsvMobile() {
+        val launchIntent = packageManager.getLaunchIntentForPackage(GSV_PACKAGE_NAME)
+        val intent = launchIntent ?: Intent(Intent.ACTION_VIEW, android.net.Uri.parse(GSV_PROJECT_URL))
+        runCatching { startActivity(intent) }
+    }
+
+    private fun updateNarrationEngine(engine: NarrationEngine) {
+        gsvStatus = null
+        lifecycleScope.launch { readerSettings.setNarrationEngine(engine) }
+    }
+
+    private fun updateNarrationRate(rate: Float) {
+        lifecycleScope.launch { readerSettings.setNarrationRate(rate) }
+    }
+
+    private fun updateGsvPort(port: Int) {
+        gsvStatus = null
+        lifecycleScope.launch { readerSettings.setGsvPort(port) }
     }
 
     private suspend fun showPublicationReader(book: BookEntity) {
@@ -356,6 +593,7 @@ class ReaderActivity : FragmentActivity() {
             observeProgression(book)
             observeBookmarks(book.id)
             observePublicationPreferences(supportsTypography)
+            applyNarrationState(NarrationService.currentState.value)
             if (touchExplorationEnabled) showPublicationChrome()
         }
     }
@@ -436,9 +674,13 @@ class ReaderActivity : FragmentActivity() {
                             lifecycleScope.launch { readerSettings.setReaderImageScrim(scrim) }
                         },
                         autoHideEnabled = !touchExplorationEnabled,
-                        onSeekPage = ::seekToPage,
+                        onSeekPage = { page ->
+                            stopNarrationIfActive()
+                            seekToPage(page)
+                        },
                         tableOfContents = publication?.tableOfContents.orEmpty(),
                         onTocClick = { link ->
+                            stopNarrationIfActive()
                             navigator?.go(link)
                             chromeState.closePanel()
                         },
@@ -452,6 +694,20 @@ class ReaderActivity : FragmentActivity() {
                         onBookmarkClick = ::handleBookmarkClick,
                         onBookmarkDelete = ::handleBookmarkDelete,
                         searchAvailable = publicationReader == PublicationReader.EPUB,
+                        narrationAvailable = publicationReader == PublicationReader.EPUB,
+                        narrationState = narrationState,
+                        gsvStatus = gsvStatus,
+                        onNarrationToggle = {
+                            toggleNarration { startPublicationNarration(title) }
+                        },
+                        onNarrationStop = {
+                            stopNarrationIfActive()
+                        },
+                        onNarrationEngineChange = ::updateNarrationEngine,
+                        onNarrationRateChange = ::updateNarrationRate,
+                        onGsvPortChange = ::updateGsvPort,
+                        onRefreshGsvStatus = ::refreshGsvStatus,
+                        onOpenGsv = ::openGsvMobile,
                         onVisibilityChanged = { visible ->
                             if (!visible && !chromeState.visible) {
                                 composeView.visibility = View.GONE
@@ -560,6 +816,7 @@ class ReaderActivity : FragmentActivity() {
     }
 
     private fun handleSearchResultClick(result: ReaderSearchResult) {
+        stopNarrationIfActive()
         result.locator?.let { locator ->
             navigator?.go(locator)
             showSearchHighlight(locator)
@@ -834,6 +1091,21 @@ class ReaderActivity : FragmentActivity() {
                     onBackgroundScrimChange = { scrim ->
                         lifecycleScope.launch { readerSettings.setReaderImageScrim(scrim) }
                     },
+                    narrationState = narrationState,
+                    gsvStatus = gsvStatus,
+                    onNarrationToggle = { startOffset ->
+                        toggleNarration {
+                            startTextNarration(book.title, content, startOffset)
+                        }
+                    },
+                    onNarrationStop = {
+                        stopNarrationIfActive()
+                    },
+                    onNarrationEngineChange = ::updateNarrationEngine,
+                    onNarrationRateChange = ::updateNarrationRate,
+                    onGsvPortChange = ::updateGsvPort,
+                    onRefreshGsvStatus = ::refreshGsvStatus,
+                    onOpenGsv = ::openGsvMobile,
                 )
             }
         }
@@ -949,6 +1221,7 @@ class ReaderActivity : FragmentActivity() {
     }
 
     private fun handleBookmarkClick(bookmark: BookmarkEntity) {
+        stopNarrationIfActive()
         bookmark.locatorJson?.let { json ->
             runCatching { Locator.fromJSON(JSONObject(json)) }.getOrNull()?.let {
                 navigator?.go(it)
@@ -1194,6 +1467,9 @@ class ReaderActivity : FragmentActivity() {
     }
 
     override fun onDestroy() {
+        narrationBuildJob?.cancel()
+        gsvStatusJob?.cancel()
+        pendingNarrationStart = null
         super.onDestroy()
         chromeView = null
         navigator = null
@@ -1217,6 +1493,9 @@ class ReaderActivity : FragmentActivity() {
         private const val MAX_CAPTURE_DIMENSION = 1280
         private const val BACKDROP_REFRESH_MIN_INTERVAL_MILLIS = 400L
         private const val BACKDROP_REFRESH_CAPTURE_DELAY_MILLIS = 32L
+        private const val NARRATION_DECORATION_GROUP = "narration"
+        private const val GSV_PACKAGE_NAME = "ai.gsv.mobile"
+        private const val GSV_PROJECT_URL = "https://github.com/tuxKOH/GPT-SoViTs-android"
 
         fun intent(context: android.content.Context, bookId: Long) =
             android.content.Intent(context, ReaderActivity::class.java)
@@ -1269,18 +1548,20 @@ private fun TextReaderScreen(
     onImportBackground: () -> Unit,
     onClearBackground: () -> Unit,
     onBackgroundScrimChange: (Float) -> Unit,
+    narrationState: NarrationPlaybackState,
+    gsvStatus: GsvEndpointStatus?,
+    onNarrationToggle: (Int) -> Unit,
+    onNarrationStop: () -> Unit,
+    onNarrationEngineChange: (NarrationEngine) -> Unit,
+    onNarrationRateChange: (Float) -> Unit,
+    onGsvPortChange: (Int) -> Unit,
+    onRefreshGsvStatus: () -> Unit,
+    onOpenGsv: () -> Unit,
 ) {
-    val chunks = remember(content) { chunkText(content) }
-    val chunkStartOffsets = remember(chunks) {
-        buildList {
-            var offset = 0
-            chunks.forEach { chunk ->
-                add(offset)
-                offset += chunk.length
-            }
-        }
-    }
-    val totalCharacterCount = remember(chunks) { chunks.sumOf { it.length }.coerceAtLeast(1) }
+    val chunkItems = remember(content) { buildNarrationTextChunks(content) }
+    val chunks = remember(chunkItems) { chunkItems.map { it.text } }
+    val chunkStartOffsets = remember(chunkItems) { chunkItems.map { it.startOffset } }
+    val totalCharacterCount = content.length.coerceAtLeast(1)
     val initialItem = initialPosition.itemIndex.coerceIn(0, maxOf(0, chunks.lastIndex))
     val listState = rememberLazyListState(
         initialFirstVisibleItemIndex = initialItem,
@@ -1427,6 +1708,7 @@ private fun TextReaderScreen(
         }
     }
     val handleSearchResultClick: (ReaderSearchResult) -> Unit = { result ->
+        if (narrationState.isActive) onNarrationStop()
         if (result.itemIndex >= 0) {
             seekScope.launch {
                 listState.scrollToItem(result.itemIndex, 0)
@@ -1456,6 +1738,7 @@ private fun TextReaderScreen(
             it.scrollOffset == listState.firstVisibleItemScrollOffset
     }
     val handleTxtBookmarkClick: (BookmarkEntity) -> Unit = { bookmark ->
+        if (narrationState.isActive) onNarrationStop()
         if (bookmark.itemIndex >= 0) {
             seekScope.launch { listState.scrollToItem(bookmark.itemIndex, bookmark.scrollOffset) }
         }
@@ -1498,6 +1781,12 @@ private fun TextReaderScreen(
                     seekingText = false
                 }
             }
+        }
+    }
+    val narrationAnchor = narrationState.anchor as? NarrationAnchor.Txt
+    LaunchedEffect(narrationAnchor, narrationState.phase) {
+        if (narrationAnchor != null && narrationState.isActive) {
+            seekTo(narrationAnchor.totalFraction)
         }
     }
     Box(Modifier.fillMaxSize()) {
@@ -1571,7 +1860,10 @@ private fun TextReaderScreen(
             onClearBackground = onClearBackground,
             onBackgroundScrimChange = onBackgroundScrimChange,
             autoHideEnabled = autoHideEnabled,
-            onSeekFraction = seekTo,
+            onSeekFraction = { fraction ->
+                if (narrationState.isActive) onNarrationStop()
+                seekTo(fraction)
+            },
             searchResults = searchResults,
             searching = searching,
             onSearchQuery = handleSearchQuery,
@@ -1586,6 +1878,30 @@ private fun TextReaderScreen(
             },
             onBookmarkClick = handleTxtBookmarkClick,
             onBookmarkDelete = onBookmarkDelete,
+            narrationAvailable = true,
+            narrationState = narrationState,
+            gsvStatus = gsvStatus,
+            onNarrationToggle = {
+                val index = listState.firstVisibleItemIndex.coerceIn(0, chunkItems.lastIndex)
+                val chunk = chunkItems[index]
+                val itemSize = listState.layoutInfo.visibleItemsInfo
+                    .firstOrNull { it.index == index }
+                    ?.size
+                    ?: 0
+                val fraction = if (itemSize > 0) {
+                    listState.firstVisibleItemScrollOffset.toFloat() / itemSize
+                } else {
+                    0f
+                }
+                val startOffset = chunk.startOffset + (chunk.text.length * fraction.coerceIn(0f, 1f)).toInt()
+                onNarrationToggle(startOffset.coerceIn(0, content.length))
+            },
+            onNarrationStop = onNarrationStop,
+            onNarrationEngineChange = onNarrationEngineChange,
+            onNarrationRateChange = onNarrationRateChange,
+            onGsvPortChange = onGsvPortChange,
+            onRefreshGsvStatus = onRefreshGsvStatus,
+            onOpenGsv = onOpenGsv,
         )
     }
 }
@@ -1671,22 +1987,3 @@ private const val TEXT_CHROME_TAP_REGION_TOP = 0.10f
 private const val TEXT_CHROME_TAP_REGION_BOTTOM = 0.24f
 
 private enum class PublicationReader { EPUB, PDF, IMAGE }
-
-private fun chunkText(text: String, chunkSize: Int = 4_000): List<String> {
-    if (text.isEmpty()) return listOf("")
-    val chunks = ArrayList<String>((text.length + chunkSize - 1) / chunkSize)
-    var start = 0
-    while (start < text.length) {
-        var end = minOf(start + chunkSize, text.length)
-        val lineBreak = if (end < text.length) text.lastIndexOf('\n', end - 1) else -1
-        if (lineBreak >= start + chunkSize / 2) {
-            end = lineBreak
-        } else if (end < text.length && Character.isHighSurrogate(text[end - 1])) {
-            end--
-        }
-        chunks += text.substring(start, end)
-        start = if (end < text.length && text[end] == '\n') end + 1 else end
-    }
-    if (text.endsWith('\n')) chunks += ""
-    return chunks
-}

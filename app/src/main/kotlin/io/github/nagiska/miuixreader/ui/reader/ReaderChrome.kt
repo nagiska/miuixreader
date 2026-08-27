@@ -90,26 +90,36 @@ import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.vibrancy
 import io.github.nagiska.miuixreader.R
 import io.github.nagiska.miuixreader.data.BookmarkEntity
+import io.github.nagiska.miuixreader.data.MAX_GSV_PORT
 import io.github.nagiska.miuixreader.data.MIN_FONT_SCALE
 import io.github.nagiska.miuixreader.data.MAX_FONT_SCALE
 import io.github.nagiska.miuixreader.data.MAX_IMAGE_SCRIM
+import io.github.nagiska.miuixreader.data.MAX_NARRATION_RATE
+import io.github.nagiska.miuixreader.data.MIN_GSV_PORT
 import io.github.nagiska.miuixreader.data.MIN_IMAGE_SCRIM
+import io.github.nagiska.miuixreader.data.MIN_NARRATION_RATE
+import io.github.nagiska.miuixreader.data.NarrationEngine
 import io.github.nagiska.miuixreader.data.ReaderBackgroundMode
 import io.github.nagiska.miuixreader.data.ReaderFontFamily
 import io.github.nagiska.miuixreader.data.ReaderPreferences
 import io.github.nagiska.miuixreader.data.contrastTextColor
 import io.github.nagiska.miuixreader.ui.LocalLiquidGlassOpacity
 import io.github.nagiska.miuixreader.ui.stringResourceCompat
+import io.github.nagiska.miuixreader.tts.GsvEndpointStatus
+import io.github.nagiska.miuixreader.tts.NarrationPhase
+import io.github.nagiska.miuixreader.tts.NarrationPlaybackState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Locale
 import kotlin.math.roundToInt
 import org.readium.r2.shared.publication.Link
 import org.readium.r2.shared.publication.Locator
 import top.yukonga.miuix.kmp.anim.folmeSpring
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
+import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ColorPalette
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -125,8 +135,12 @@ import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.icon.extended.Favorites
 import top.yukonga.miuix.kmp.icon.extended.Image
 import top.yukonga.miuix.kmp.icon.extended.ListView
+import top.yukonga.miuix.kmp.icon.extended.Pause
 import top.yukonga.miuix.kmp.icon.extended.Pin
+import top.yukonga.miuix.kmp.icon.extended.Play
 import top.yukonga.miuix.kmp.icon.extended.Search
+import top.yukonga.miuix.kmp.icon.extended.VolumeOff
+import top.yukonga.miuix.kmp.icon.extended.VolumeUp
 import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.theme.Colors
 import top.yukonga.miuix.kmp.theme.LocalContentColor
@@ -184,7 +198,16 @@ class ReaderChromeState {
     }
 }
 
-enum class ReaderPanel { NONE, TYPOGRAPHY, BACKGROUND, PROGRESS, TABLE_OF_CONTENTS, SEARCH, BOOKMARKS }
+enum class ReaderPanel {
+    NONE,
+    TYPOGRAPHY,
+    BACKGROUND,
+    NARRATION,
+    PROGRESS,
+    TABLE_OF_CONTENTS,
+    SEARCH,
+    BOOKMARKS,
+}
 
 data class ReaderPositionLabel(
     val value: String = "",
@@ -229,6 +252,16 @@ fun ReaderChrome(
     onBookmarkClick: (BookmarkEntity) -> Unit = {},
     onBookmarkDelete: (BookmarkEntity) -> Unit = {},
     searchAvailable: Boolean = true,
+    narrationAvailable: Boolean = false,
+    narrationState: NarrationPlaybackState = NarrationPlaybackState(),
+    gsvStatus: GsvEndpointStatus? = null,
+    onNarrationToggle: () -> Unit = {},
+    onNarrationStop: () -> Unit = {},
+    onNarrationEngineChange: (NarrationEngine) -> Unit = {},
+    onNarrationRateChange: (Float) -> Unit = {},
+    onGsvPortChange: (Int) -> Unit = {},
+    onRefreshGsvStatus: () -> Unit = {},
+    onOpenGsv: () -> Unit = {},
 ) {
     chrome.AutoHide(enabled = autoHideEnabled)
     LaunchedEffect(chrome.visible) {
@@ -365,6 +398,8 @@ fun ReaderChrome(
                 tocAvailable = tableOfContents.isNotEmpty(),
                 onSearch = { chrome.open(ReaderPanel.SEARCH) },
                 searchAvailable = searchAvailable,
+                onNarration = { chrome.open(ReaderPanel.NARRATION) },
+                narrationAvailable = narrationAvailable,
                 colors = chromeColors,
                 backProgress = chromeBackProgress,
                 modifier = Modifier.onGloballyPositioned {
@@ -380,6 +415,9 @@ fun ReaderChrome(
                 onOpenBookmarks = { chrome.open(ReaderPanel.BOOKMARKS) },
                 onToggleBookmark = onToggleBookmark,
                 bookmarked = bookmarked,
+                narrationAvailable = narrationAvailable,
+                narrationPhase = narrationState.phase,
+                onNarrationToggle = onNarrationToggle,
                 colors = chromeColors,
                 backProgress = chromeBackProgress,
                 modifier = Modifier.onGloballyPositioned {
@@ -414,6 +452,23 @@ fun ReaderChrome(
             onScrimChange = onBackgroundScrimChange,
             onImport = onImportBackground,
             onClearImage = onClearBackground,
+        )
+        ReaderNarrationSheet(
+            show = chrome.panel == ReaderPanel.NARRATION,
+            preferences = preferences,
+            state = narrationState,
+            gsvStatus = gsvStatus,
+            backdrop = backdrop,
+            colors = chromeColors,
+            onDismiss = chrome::closePanel,
+            backProgress = sheetBackProgress,
+            onToggle = onNarrationToggle,
+            onStop = onNarrationStop,
+            onEngineChange = onNarrationEngineChange,
+            onRateChange = onNarrationRateChange,
+            onPortChange = onGsvPortChange,
+            onRefreshGsvStatus = onRefreshGsvStatus,
+            onOpenGsv = onOpenGsv,
         )
         ReaderProgressSheet(
             show = chrome.panel == ReaderPanel.PROGRESS,
@@ -479,6 +534,8 @@ private fun ReaderTopBar(
     tocAvailable: Boolean,
     onSearch: () -> Unit,
     searchAvailable: Boolean,
+    onNarration: () -> Unit,
+    narrationAvailable: Boolean,
     colors: Colors,
     backProgress: Float = 0f,
     modifier: Modifier = Modifier,
@@ -567,6 +624,14 @@ private fun ReaderTopBar(
                                 )
                             }
                         }
+                        if (narrationAvailable) {
+                            IconButton(onClick = onNarration) {
+                                Icon(
+                                    MiuixIcons.VolumeUp,
+                                    contentDescription = stringResourceCompat(R.string.narration),
+                                )
+                            }
+                        }
                         if (supportsTypography) {
                             IconButton(onClick = onTypography) {
                                 Text(
@@ -604,6 +669,9 @@ private fun ReaderBottomBar(
     onOpenBookmarks: () -> Unit = {},
     onToggleBookmark: () -> Unit = {},
     bookmarked: Boolean = false,
+    narrationAvailable: Boolean = false,
+    narrationPhase: NarrationPhase = NarrationPhase.IDLE,
+    onNarrationToggle: () -> Unit = {},
     backProgress: Float = 0f,
     modifier: Modifier = Modifier,
 ) {
@@ -659,6 +727,21 @@ private fun ReaderBottomBar(
                                 style = MiuixTheme.textStyles.body2,
                                 textAlign = TextAlign.Center,
                             )
+                            if (narrationAvailable) {
+                                val playing = narrationPhase in setOf(
+                                    NarrationPhase.PREPARING,
+                                    NarrationPhase.BUFFERING,
+                                    NarrationPhase.PLAYING,
+                                )
+                                IconButton(onClick = onNarrationToggle) {
+                                    Icon(
+                                        imageVector = if (playing) MiuixIcons.Pause else MiuixIcons.Play,
+                                        contentDescription = stringResourceCompat(
+                                            if (playing) R.string.narration_pause else R.string.narration_play,
+                                        ),
+                                    )
+                                }
+                            }
                             IconButton(onClick = onToggleBookmark) {
                                 Icon(
                                     MiuixIcons.Pin,
@@ -1035,6 +1118,158 @@ private fun ReaderBackgroundSheet(
                     showKeyPoints = false,
                 )
             }
+        }
+    }
+}
+
+@Composable
+private fun ReaderNarrationSheet(
+    show: Boolean,
+    preferences: ReaderPreferences,
+    state: NarrationPlaybackState,
+    gsvStatus: GsvEndpointStatus?,
+    backdrop: Backdrop,
+    colors: Colors,
+    onDismiss: () -> Unit,
+    onToggle: () -> Unit,
+    onStop: () -> Unit,
+    onEngineChange: (NarrationEngine) -> Unit,
+    onRateChange: (Float) -> Unit,
+    onPortChange: (Int) -> Unit,
+    onRefreshGsvStatus: () -> Unit,
+    onOpenGsv: () -> Unit,
+    backProgress: Float = 0f,
+) {
+    var localRate by remember(preferences.narrationRate) {
+        mutableFloatStateOf(preferences.narrationRate)
+    }
+    var portText by remember(preferences.gsvPort) { mutableStateOf(preferences.gsvPort.toString()) }
+    LaunchedEffect(
+        show,
+        preferences.narrationEngine,
+        preferences.gsvPort,
+    ) {
+        if (show && preferences.narrationEngine == NarrationEngine.GSV_LOCAL) {
+            onRefreshGsvStatus()
+        }
+    }
+    ReaderGlassSheet(
+        show = show,
+        title = stringResourceCompat(R.string.narration),
+        liquidGlassEnabled = preferences.liquidGlassEnabled,
+        backdrop = backdrop,
+        colors = colors,
+        onDismiss = onDismiss,
+        backProgress = backProgress,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(stringResourceCompat(R.string.narration_engine), style = MiuixTheme.textStyles.body1)
+            TabRowWithContour(
+                tabs = listOf(
+                    stringResourceCompat(R.string.narration_engine_system),
+                    stringResourceCompat(R.string.narration_engine_gsv),
+                ),
+                selectedTabIndex = preferences.narrationEngine.ordinal,
+                onTabSelected = { index ->
+                    NarrationEngine.entries.getOrNull(index)?.let(onEngineChange)
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            SliderPreference(
+                value = localRate,
+                onValueChange = { value ->
+                    localRate = value
+                    onRateChange(value)
+                },
+                title = stringResourceCompat(R.string.narration_rate),
+                valueText = String.format(Locale.getDefault(), "%.1fx", localRate),
+                valueRange = MIN_NARRATION_RATE..MAX_NARRATION_RATE,
+                steps = 14,
+                showKeyPoints = false,
+            )
+            if (preferences.narrationEngine == NarrationEngine.GSV_LOCAL) {
+                TextField(
+                    value = portText,
+                    onValueChange = { value ->
+                        val filtered = value.filter(Char::isDigit).take(5)
+                        portText = filtered
+                        filtered.toIntOrNull()
+                            ?.takeIf { it in MIN_GSV_PORT..MAX_GSV_PORT }
+                            ?.let(onPortChange)
+                    },
+                    label = stringResourceCompat(R.string.narration_gsv_port),
+                    useLabelAsPlaceholder = false,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                val statusText = when {
+                    gsvStatus == null -> stringResourceCompat(R.string.narration_gsv_checking)
+                    gsvStatus.reachable && gsvStatus.ready -> stringResourceCompat(
+                        R.string.narration_gsv_ready,
+                        gsvStatus.backendName.ifBlank { "GSV Mobile" },
+                    )
+                    gsvStatus.reachable -> stringResourceCompat(R.string.narration_gsv_not_ready)
+                    else -> stringResourceCompat(
+                        R.string.narration_gsv_unreachable_detail,
+                        gsvStatus.errorMessage.orEmpty(),
+                    )
+                }
+                Text(statusText, style = MiuixTheme.textStyles.body2)
+                TextButton(
+                    text = stringResourceCompat(R.string.narration_open_gsv),
+                    onClick = onOpenGsv,
+                )
+            }
+            state.errorMessage?.takeIf(String::isNotBlank)?.let { error ->
+                Text(error, style = MiuixTheme.textStyles.body2)
+            }
+            state.backendName.takeIf(String::isNotBlank)?.let { backend ->
+                Text(
+                    stringResourceCompat(R.string.narration_backend, backend),
+                    style = MiuixTheme.textStyles.body2,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val pausable = state.phase in setOf(
+                    NarrationPhase.PREPARING,
+                    NarrationPhase.BUFFERING,
+                    NarrationPhase.PLAYING,
+                )
+                Button(onClick = onToggle, modifier = Modifier.weight(1f)) {
+                    Icon(
+                        imageVector = if (pausable) MiuixIcons.Pause else MiuixIcons.Play,
+                        contentDescription = null,
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Text(
+                        stringResourceCompat(
+                            when {
+                                pausable -> R.string.narration_pause
+                                state.phase == NarrationPhase.PAUSED -> R.string.narration_resume
+                                else -> R.string.narration_start
+                            },
+                        ),
+                    )
+                }
+                if (state.isActive) {
+                    IconButton(onClick = onStop) {
+                        Icon(
+                            MiuixIcons.VolumeOff,
+                            contentDescription = stringResourceCompat(R.string.narration_stop),
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
         }
     }
 }

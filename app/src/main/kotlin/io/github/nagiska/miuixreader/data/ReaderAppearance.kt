@@ -8,6 +8,8 @@ enum class ReaderBackgroundMode { FOLLOW_THEME, COLOR, IMAGE }
 
 enum class BackgroundTarget { BOOKSHELF, READER }
 
+enum class NarrationEngine { SYSTEM, GSV_LOCAL }
+
 data class ReaderPreferences(
     val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
     val liquidGlassEnabled: Boolean = false,
@@ -21,6 +23,9 @@ data class ReaderPreferences(
     val fontFamily: ReaderFontFamily = ReaderFontFamily.ORIGINAL,
     val fontScale: Float = 1f,
     val fontWeight: Int = 400,
+    val narrationEngine: NarrationEngine = NarrationEngine.SYSTEM,
+    val narrationRate: Float = 1f,
+    val gsvPort: Int = DEFAULT_GSV_PORT,
 )
 
 const val DEFAULT_IMAGE_SCRIM = 0.45f
@@ -32,6 +37,11 @@ const val DEFAULT_LIQUID_GLASS_OPACITY = 1f
 const val MIN_LIQUID_GLASS_OPACITY = 0.2f
 const val MAX_LIQUID_GLASS_OPACITY = 1f
 const val DEFAULT_READER_BACKGROUND: Int = -461330
+const val DEFAULT_GSV_PORT = 9880
+const val MIN_GSV_PORT = 1024
+const val MAX_GSV_PORT = 65535
+const val MIN_NARRATION_RATE = 0.5f
+const val MAX_NARRATION_RATE = 2f
 
 fun clampLiquidGlassOpacity(opacity: Float): Float =
     opacity.coerceIn(MIN_LIQUID_GLASS_OPACITY, MAX_LIQUID_GLASS_OPACITY)
