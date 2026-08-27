@@ -74,6 +74,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -1143,6 +1144,7 @@ private fun ReaderNarrationSheet(
     var localRate by remember(preferences.narrationRate) {
         mutableFloatStateOf(preferences.narrationRate)
     }
+    val locale = LocalLocale.current.platformLocale
     var portText by remember(preferences.gsvPort) { mutableStateOf(preferences.gsvPort.toString()) }
     LaunchedEffect(
         show,
@@ -1187,7 +1189,7 @@ private fun ReaderNarrationSheet(
                     onRateChange(value)
                 },
                 title = stringResourceCompat(R.string.narration_rate),
-                valueText = String.format(Locale.getDefault(), "%.1fx", localRate),
+                valueText = String.format(locale, "%.1fx", localRate),
                 valueRange = MIN_NARRATION_RATE..MAX_NARRATION_RATE,
                 steps = 14,
                 showKeyPoints = false,
