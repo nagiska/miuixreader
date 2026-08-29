@@ -182,7 +182,7 @@ internal fun findPublicationStartBlock(
     }
     if (matching.isEmpty()) {
         if (targetText != null) {
-            blocks.indexOfFirst(::matchesTarget)
+            blocks.indices.indexOfFirst(::matchesTarget)
                 .takeIf { it >= 0 }
                 ?.let { return it }
         }
