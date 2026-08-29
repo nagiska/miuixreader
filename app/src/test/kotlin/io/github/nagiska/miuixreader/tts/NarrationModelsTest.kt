@@ -1,7 +1,7 @@
 package io.github.nagiska.miuixreader.tts
 
-import io.github.nagiska.miuixreader.data.NarrationEngine
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -32,19 +32,15 @@ class NarrationModelsTest {
     }
 
     @Test
-    fun sessionRetainsSelectedLocalEngine() {
+    fun sessionRetainsOrderedSegments() {
         val session = NarrationSession(
             bookId = 1L,
             title = "Book",
-            engine = NarrationEngine.GSV_LOCAL,
-            rate = 1f,
-            gsvPort = 9880,
             segments = listOf(
                 NarrationSegment("A sentence.", NarrationAnchor.Txt(0, 0f, 0f)),
             ),
         )
 
-        assertTrue(session.engine == NarrationEngine.GSV_LOCAL)
-        assertTrue(session.segments.single().text == "A sentence.")
+        assertEquals("A sentence.", session.segments.single().text)
     }
 }

@@ -50,4 +50,22 @@ class NarrationTextTest {
         assertTrue(segments.first().anchor == NarrationAnchor.Publication("two"))
         assertTrue(segments.any { it.anchor == NarrationAnchor.Publication("three") })
     }
+
+    @Test
+    fun publicationStartsAtCurrentHighlightInsideTheBlock() {
+        val blocks = listOf(
+            PublicationNarrationBlock("already spoken. continue here.", "one", "chapter.xhtml", 0.0),
+            PublicationNarrationBlock("next paragraph.", "two", "chapter.xhtml", 0.2),
+        )
+
+        val segments = buildPublicationNarrationSegments(
+            blocks = blocks,
+            href = "chapter.xhtml#section",
+            progression = 0.1,
+            highlight = "continue here.",
+        )
+
+        assertEquals("continue here.", segments.first().text)
+        assertEquals(NarrationAnchor.Publication("one"), segments.first().anchor)
+    }
 }

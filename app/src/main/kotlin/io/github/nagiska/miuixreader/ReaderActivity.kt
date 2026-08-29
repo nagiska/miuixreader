@@ -77,7 +77,6 @@ import io.github.nagiska.miuixreader.data.BookmarkEntity
 import io.github.nagiska.miuixreader.data.BookmarkKind
 import io.github.nagiska.miuixreader.data.ReaderBackgroundMode
 import io.github.nagiska.miuixreader.data.ReaderFontFamily
-import io.github.nagiska.miuixreader.data.NarrationEngine
 import io.github.nagiska.miuixreader.data.ReaderPreferences
 import io.github.nagiska.miuixreader.data.bookFormat
 import io.github.nagiska.miuixreader.data.contrastTextColor
@@ -90,8 +89,6 @@ import io.github.nagiska.miuixreader.ui.reader.ReaderSearchResult
 import io.github.nagiska.miuixreader.ui.reader.flattenToc
 import io.github.nagiska.miuixreader.ui.reader.pageToProgression
 import io.github.nagiska.miuixreader.ui.theme.ReaderTheme
-import io.github.nagiska.miuixreader.tts.GsvEndpointStatus
-import io.github.nagiska.miuixreader.tts.GsvLocalClient
 import io.github.nagiska.miuixreader.tts.NarrationAnchor
 import io.github.nagiska.miuixreader.tts.NarrationPhase
 import io.github.nagiska.miuixreader.tts.NarrationPlaybackState
@@ -112,6 +109,8 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
@@ -182,11 +181,13 @@ class ReaderActivity : FragmentActivity() {
     private var cachedBackgroundSignature: String? = null
     private var cachedBackgroundDataUri: String? = null
     private var narrationState by mutableStateOf(NarrationPlaybackState())
-    private var gsvStatus by mutableStateOf<GsvEndpointStatus?>(null)
     private var narrationBuildJob: Job? = null
-    private var gsvStatusJob: Job? = null
     private var pendingNarrationStart: (() -> Unit)? = null
     private var lastNarrationLocatorJson: String? = null
+    private var typographyRestoreJob: Job? = null
+    private var typographyGeneration = 0L
+    private var suppressProgression = false
+    private val progressionWriteMutex = Mutex()
 
     private val readerSettings get() = (application as ReaderApplication).settings
     private val touchExplorationEnabled: Boolean
@@ -274,16 +275,22 @@ class ReaderActivity : FragmentActivity() {
             return
         }
         narrationState = state
+        if (state.phase != NarrationPhase.PLAYING) {
+            if (state.phase in setOf(NarrationPhase.IDLE, NarrationPhase.ERROR)) {
+                clearNarrationHighlight()
+            }
+            return
+        }
         val anchor = state.anchor as? NarrationAnchor.Publication
-        if (anchor == null || state.phase in setOf(NarrationPhase.IDLE, NarrationPhase.ERROR)) {
+        if (anchor == null) {
             clearNarrationHighlight()
             return
         }
         val nav = navigator ?: return
         if (anchor.locatorJson == lastNarrationLocatorJson) return
         val locator = runCatching { Locator.fromJSON(JSONObject(anchor.locatorJson)) }.getOrNull() ?: return
-        nav.go(locator, animated = false)
         lastNarrationLocatorJson = anchor.locatorJson
+        nav.go(locator, animated = false)
         val decorable = nav as? DecorableNavigator ?: return
         if (!decorable.supportsDecorationStyle(Decoration.Style.Highlight::class)) return
         lifecycleScope.launch {
@@ -343,25 +350,36 @@ class ReaderActivity : FragmentActivity() {
             try {
                 val pub = publication ?: error(getString(R.string.narration_no_text))
                 val publicationContent = pub.content() ?: error(getString(R.string.narration_no_text))
-                val current = navigator?.currentLocator?.value
+                val current = (navigator as? VisualNavigator)?.firstVisibleElementLocator()
+                    ?: navigator?.currentLocator?.value
                 val blocks = withContext(Dispatchers.Default) {
-                    publicationContent.elements().mapNotNull { element ->
-                        val textual = element as? Content.TextualElement ?: return@mapNotNull null
-                        textual.text?.takeIf(String::isNotBlank)?.let { text ->
-                            PublicationNarrationBlock(
-                                text = text,
-                                locatorJson = textual.locator.toJSON().toString(),
-                                href = textual.locator.href.toString(),
-                                progression = textual.locator.locations.progression,
-                            )
+                    publicationContent.elements().flatMap { element ->
+                        val textual = element as? Content.TextualElement
+                            ?: return@flatMap emptyList<PublicationNarrationBlock>()
+                        val parts = if (textual is Content.TextElement && textual.segments.isNotEmpty()) {
+                            textual.segments.map { segment -> segment.text to segment.locator }
+                        } else {
+                            listOfNotNull(textual.text?.let { text -> text to textual.locator })
                         }
-                    }.toList()
+                        parts.mapNotNull { (text, locator) ->
+                            text.takeIf(String::isNotBlank)?.let {
+                                PublicationNarrationBlock(
+                                    text = it,
+                                    locatorJson = locator.toJSON().toString(),
+                                    href = locator.href.toString(),
+                                    progression = locator.locations.progression,
+                                    highlight = locator.text.highlight,
+                                )
+                            }
+                        }
+                    }
                 }
                 val segments = withContext(Dispatchers.Default) {
                     buildPublicationNarrationSegments(
                         blocks,
                         current?.href?.toString(),
                         current?.locations?.progression,
+                        current?.text?.highlight,
                     )
                 }
                 startNarrationSession(title, segments)
@@ -415,9 +433,6 @@ class ReaderActivity : FragmentActivity() {
             NarrationSession(
                 bookId = currentBookId,
                 title = title,
-                engine = latestPreferences.narrationEngine,
-                rate = latestPreferences.narrationRate,
-                gsvPort = latestPreferences.gsvPort,
                 segments = segments,
             ),
         )
@@ -433,39 +448,24 @@ class ReaderActivity : FragmentActivity() {
         }
     }
 
-    private fun refreshGsvStatus() {
-        gsvStatusJob?.cancel()
-        gsvStatus = null
-        val port = latestPreferences.gsvPort
-        val rate = latestPreferences.narrationRate
-        gsvStatusJob = lifecycleScope.launch {
-            val client = GsvLocalClient(port, rate)
-            gsvStatus = try {
-                client.checkStatus()
-            } finally {
-                client.close()
+    private fun saveProgressionIfAllowed(bookId: Long, progression: String) {
+        if (suppressProgression) return
+        val typographyGenerationAtRequest = typographyGeneration
+        val narrationAtRequest = NarrationService.currentState.value
+        if (narrationAtRequest.bookId == bookId && narrationAtRequest.isActive) return
+        lifecycleScope.launch {
+            progressionWriteMutex.withLock {
+                if (
+                    typographyGenerationAtRequest == typographyGeneration &&
+                    !suppressProgression &&
+                    NarrationService.currentState.value.let { narration ->
+                        narration.bookId != bookId || !narration.isActive
+                    }
+                ) {
+                    (application as ReaderApplication).books.saveProgression(bookId, progression)
+                }
             }
         }
-    }
-
-    private fun openGsvMobile() {
-        val launchIntent = packageManager.getLaunchIntentForPackage(GSV_PACKAGE_NAME)
-        val intent = launchIntent ?: Intent(Intent.ACTION_VIEW, android.net.Uri.parse(GSV_PROJECT_URL))
-        runCatching { startActivity(intent) }
-    }
-
-    private fun updateNarrationEngine(engine: NarrationEngine) {
-        gsvStatus = null
-        lifecycleScope.launch { readerSettings.setNarrationEngine(engine) }
-    }
-
-    private fun updateNarrationRate(rate: Float) {
-        lifecycleScope.launch { readerSettings.setNarrationRate(rate) }
-    }
-
-    private fun updateGsvPort(port: Int) {
-        gsvStatus = null
-        lifecycleScope.launch { readerSettings.setGsvPort(port) }
     }
 
     private suspend fun showPublicationReader(book: BookEntity) {
@@ -696,18 +696,12 @@ class ReaderActivity : FragmentActivity() {
                         searchAvailable = publicationReader == PublicationReader.EPUB,
                         narrationAvailable = publicationReader == PublicationReader.EPUB,
                         narrationState = narrationState,
-                        gsvStatus = gsvStatus,
                         onNarrationToggle = {
                             toggleNarration { startPublicationNarration(title) }
                         },
                         onNarrationStop = {
                             stopNarrationIfActive()
                         },
-                        onNarrationEngineChange = ::updateNarrationEngine,
-                        onNarrationRateChange = ::updateNarrationRate,
-                        onGsvPortChange = ::updateGsvPort,
-                        onRefreshGsvStatus = ::refreshGsvStatus,
-                        onOpenGsv = ::openGsvMobile,
                         onVisibilityChanged = { visible ->
                             if (!visible && !chromeState.visible) {
                                 composeView.visibility = View.GONE
@@ -1069,13 +1063,11 @@ class ReaderActivity : FragmentActivity() {
                     },
                     onBookmarkDelete = ::handleBookmarkDelete,
                     onProgress = { position ->
-                        lifecycleScope.launch {
-                            (application as ReaderApplication).books.saveProgression(
-                                book.id,
-                                "$TXT_PROGRESSION_V2_PREFIX${position.itemIndex}:" +
-                                    position.offsetFraction.coerceIn(0f, 1f),
-                            )
-                        }
+                        saveProgressionIfAllowed(
+                            book.id,
+                            "$TXT_PROGRESSION_V2_PREFIX${position.itemIndex}:" +
+                                position.offsetFraction.coerceIn(0f, 1f),
+                        )
                     },
                     onBack = ::finish,
                     onFontFamilyChange = ::updateFontFamily,
@@ -1092,7 +1084,6 @@ class ReaderActivity : FragmentActivity() {
                         lifecycleScope.launch { readerSettings.setReaderImageScrim(scrim) }
                     },
                     narrationState = narrationState,
-                    gsvStatus = gsvStatus,
                     onNarrationToggle = { startOffset ->
                         toggleNarration {
                             startTextNarration(book.title, content, startOffset)
@@ -1101,11 +1092,6 @@ class ReaderActivity : FragmentActivity() {
                     onNarrationStop = {
                         stopNarrationIfActive()
                     },
-                    onNarrationEngineChange = ::updateNarrationEngine,
-                    onNarrationRateChange = ::updateNarrationRate,
-                    onGsvPortChange = ::updateGsvPort,
-                    onRefreshGsvStatus = ::refreshGsvStatus,
-                    onOpenGsv = ::openGsvMobile,
                 )
             }
         }
@@ -1257,10 +1243,7 @@ class ReaderActivity : FragmentActivity() {
                         it.kind == BookmarkKind.BOOKMARK && it.locatorJson == locatorJson
                     }
                     refreshPublicationBackdrop()
-                    (application as ReaderApplication).books.saveProgression(
-                        book.id,
-                        locator.toJSON().toString(),
-                    )
+                    saveProgressionIfAllowed(book.id, locator.toJSON().toString())
                 }
             }
         }
@@ -1386,17 +1369,61 @@ class ReaderActivity : FragmentActivity() {
     }
 
     private fun updateFontFamily(fontFamily: ReaderFontFamily) {
-        lifecycleScope.launch { readerSettings.setFontFamily(fontFamily) }
-        refreshPositionCount()
+        stopNarrationIfActive()
+        scheduleTypographyChange(
+            change = { readerSettings.setFontFamily(fontFamily) },
+            applied = { it.fontFamily == fontFamily },
+        )
     }
 
     private fun updateFontScale(scale: Float) {
-        lifecycleScope.launch { readerSettings.setFontScale(scale) }
-        refreshPositionCount()
+        stopNarrationIfActive()
+        scheduleTypographyChange(
+            change = { readerSettings.setFontScale(scale) },
+            applied = { it.fontScale == scale },
+        )
     }
 
     private fun updateFontWeight(weight: Int) {
-        lifecycleScope.launch { readerSettings.setFontWeight(weight) }
+        stopNarrationIfActive()
+        scheduleTypographyChange(
+            change = { readerSettings.setFontWeight(weight) },
+            applied = { it.fontWeight == weight },
+        )
+    }
+
+    private fun scheduleTypographyChange(
+        change: suspend () -> Unit,
+        applied: (ReaderPreferences) -> Boolean,
+    ) {
+        typographyGeneration++
+        val generation = typographyGeneration
+        typographyRestoreJob?.cancel()
+        suppressProgression = true
+        typographyRestoreJob = lifecycleScope.launch {
+            try {
+                val anchor = if (publicationReader == PublicationReader.EPUB) {
+                    (navigator as? VisualNavigator)?.firstVisibleElementLocator()
+                        ?: navigator?.currentLocator?.value
+                } else {
+                    null
+                }
+                change()
+                withTimeoutOrNull(TYPOGRAPHY_PREFERENCE_TIMEOUT_MILLIS) {
+                    readerSettings.preferences.first { preferences -> applied(preferences) }
+                }
+                if (generation != typographyGeneration) return@launch
+                delay(TYPOGRAPHY_RESTORE_DELAY_MILLIS)
+                if (generation == typographyGeneration) {
+                    anchor?.let { navigator?.go(it, animated = false) }
+                    delay(TYPOGRAPHY_RESTORE_SETTLE_DELAY_MILLIS)
+                }
+            } finally {
+                if (generation == typographyGeneration) {
+                    suppressProgression = false
+                }
+            }
+        }
         refreshPositionCount()
     }
 
@@ -1468,7 +1495,7 @@ class ReaderActivity : FragmentActivity() {
 
     override fun onDestroy() {
         narrationBuildJob?.cancel()
-        gsvStatusJob?.cancel()
+        typographyRestoreJob?.cancel()
         pendingNarrationStart = null
         super.onDestroy()
         chromeView = null
@@ -1494,8 +1521,9 @@ class ReaderActivity : FragmentActivity() {
         private const val BACKDROP_REFRESH_MIN_INTERVAL_MILLIS = 400L
         private const val BACKDROP_REFRESH_CAPTURE_DELAY_MILLIS = 32L
         private const val NARRATION_DECORATION_GROUP = "narration"
-        private const val GSV_PACKAGE_NAME = "ai.gsv.mobile"
-        private const val GSV_PROJECT_URL = "https://github.com/tuxKOH/GPT-SoViTs-android"
+        private const val TYPOGRAPHY_PREFERENCE_TIMEOUT_MILLIS = 2_000L
+        private const val TYPOGRAPHY_RESTORE_DELAY_MILLIS = 450L
+        private const val TYPOGRAPHY_RESTORE_SETTLE_DELAY_MILLIS = 350L
 
         fun intent(context: android.content.Context, bookId: Long) =
             android.content.Intent(context, ReaderActivity::class.java)
@@ -1549,14 +1577,8 @@ private fun TextReaderScreen(
     onClearBackground: () -> Unit,
     onBackgroundScrimChange: (Float) -> Unit,
     narrationState: NarrationPlaybackState,
-    gsvStatus: GsvEndpointStatus?,
     onNarrationToggle: (Int) -> Unit,
     onNarrationStop: () -> Unit,
-    onNarrationEngineChange: (NarrationEngine) -> Unit,
-    onNarrationRateChange: (Float) -> Unit,
-    onGsvPortChange: (Int) -> Unit,
-    onRefreshGsvStatus: () -> Unit,
-    onOpenGsv: () -> Unit,
 ) {
     val chunkItems = remember(content) { buildNarrationTextChunks(content) }
     val chunks = remember(chunkItems) { chunkItems.map { it.text } }
@@ -1572,6 +1594,13 @@ private fun TextReaderScreen(
         },
     )
     val backdrop = rememberLayerBackdrop()
+    val typographySignature = listOf(
+        preferences.fontFamily,
+        preferences.fontScale,
+        preferences.fontWeight,
+    )
+    var previousTypographySignature by remember { mutableStateOf(typographySignature) }
+    var pendingTypographyOffset by remember { mutableStateOf<Int?>(null) }
     val initialProgression = textProgression(
         chunks = chunks,
         chunkStartOffsets = chunkStartOffsets,
@@ -1637,6 +1666,42 @@ private fun TextReaderScreen(
                 delay(750)
                 onProgress(position)
             }
+    }
+    fun currentTextOffset(): Int {
+        val index = listState.firstVisibleItemIndex.coerceIn(0, chunkItems.lastIndex)
+        val chunk = chunkItems[index]
+        val itemSize = listState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.index == index }
+            ?.size
+            ?: 0
+        val fraction = if (itemSize > 0) {
+            listState.firstVisibleItemScrollOffset.toFloat() / itemSize
+        } else {
+            0f
+        }
+        return (chunk.startOffset + (chunk.text.length * fraction.coerceIn(0f, 1f)).toInt())
+            .coerceIn(0, content.length)
+    }
+    LaunchedEffect(typographySignature) {
+        if (previousTypographySignature == typographySignature) return@LaunchedEffect
+        previousTypographySignature = typographySignature
+        val target = pendingTypographyOffset ?: return@LaunchedEffect
+        pendingTypographyOffset = null
+        val targetOffset = target.coerceIn(0, content.length.coerceAtLeast(1) - 1)
+        val search = chunkStartOffsets.binarySearch(targetOffset)
+        val index = (if (search >= 0) search else -search - 2).coerceIn(0, chunks.lastIndex)
+        listState.scrollToItem(index, 0)
+        val itemSize = withTimeoutOrNull(500) {
+            snapshotFlow {
+                listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }?.size ?: 0
+            }.first { it > 0 }
+        } ?: 0
+        val charsInChunk = chunks[index].length.coerceAtLeast(1)
+        val inChunk = (targetOffset - chunkStartOffsets[index]).coerceIn(0, charsInChunk - 1)
+        listState.scrollToItem(
+            index,
+            (itemSize * inChunk.toFloat() / charsInChunk).roundToInt(),
+        )
     }
     DisposableEffect(listState, chunks.size) {
         onDispose {
@@ -1784,7 +1849,7 @@ private fun TextReaderScreen(
         }
     }
     val narrationAnchor = narrationState.anchor as? NarrationAnchor.Txt
-    LaunchedEffect(narrationAnchor, narrationState.phase) {
+    LaunchedEffect(narrationAnchor) {
         if (narrationAnchor != null && narrationState.isActive) {
             seekTo(narrationAnchor.totalFraction)
         }
@@ -1850,9 +1915,18 @@ private fun TextReaderScreen(
             readerImagePath = preferences.readerBackgroundPath,
             readerImageScrim = preferences.readerBackgroundScrim,
             onBack = onBack,
-            onFontFamilyChange = onFontFamilyChange,
-            onFontScaleChange = onFontScaleChange,
-            onFontWeightChange = onFontWeightChange,
+            onFontFamilyChange = {
+                pendingTypographyOffset = currentTextOffset()
+                onFontFamilyChange(it)
+            },
+            onFontScaleChange = {
+                pendingTypographyOffset = currentTextOffset()
+                onFontScaleChange(it)
+            },
+            onFontWeightChange = {
+                pendingTypographyOffset = currentTextOffset()
+                onFontWeightChange(it)
+            },
             onBackgroundFollowTheme = onBackgroundFollowTheme,
             onBackgroundColorChange = onBackgroundColorChange,
             onBackgroundImage = onBackgroundImage,
@@ -1880,28 +1954,10 @@ private fun TextReaderScreen(
             onBookmarkDelete = onBookmarkDelete,
             narrationAvailable = true,
             narrationState = narrationState,
-            gsvStatus = gsvStatus,
             onNarrationToggle = {
-                val index = listState.firstVisibleItemIndex.coerceIn(0, chunkItems.lastIndex)
-                val chunk = chunkItems[index]
-                val itemSize = listState.layoutInfo.visibleItemsInfo
-                    .firstOrNull { it.index == index }
-                    ?.size
-                    ?: 0
-                val fraction = if (itemSize > 0) {
-                    listState.firstVisibleItemScrollOffset.toFloat() / itemSize
-                } else {
-                    0f
-                }
-                val startOffset = chunk.startOffset + (chunk.text.length * fraction.coerceIn(0f, 1f)).toInt()
-                onNarrationToggle(startOffset.coerceIn(0, content.length))
+                onNarrationToggle(currentTextOffset())
             },
             onNarrationStop = onNarrationStop,
-            onNarrationEngineChange = onNarrationEngineChange,
-            onNarrationRateChange = onNarrationRateChange,
-            onGsvPortChange = onGsvPortChange,
-            onRefreshGsvStatus = onRefreshGsvStatus,
-            onOpenGsv = onOpenGsv,
         )
     }
 }

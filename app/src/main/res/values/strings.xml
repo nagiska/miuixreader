@@ -80,18 +80,8 @@
     <string name="reader_open_failed">Could not open this book.</string>
     <string name="reader_format_unsupported">This publication format is not supported.</string>
     <string name="narration">Read aloud</string>
-    <string name="narration_engine">Voice engine</string>
-    <string name="narration_engine_system">System voice</string>
-    <string name="narration_engine_gsv">GSV Mobile</string>
-    <string name="narration_rate">Reading speed</string>
-    <string name="narration_gsv_port">GSV local API port</string>
-    <string name="narration_gsv_checking">Checking GSV Mobile...</string>
-    <string name="narration_gsv_ready">Ready - %1$s</string>
-    <string name="narration_gsv_not_ready">GSV Mobile is running, but no model is loaded.</string>
-    <string name="narration_gsv_unreachable">GSV Mobile local API is unavailable.</string>
-    <string name="narration_gsv_unreachable_detail">GSV Mobile is unavailable: %1$s</string>
-    <string name="narration_open_gsv">Open GSV Mobile</string>
-    <string name="narration_backend">Backend: %1$s</string>
+    <string name="narration_system_summary">Uses the selected Android TTS engine, including MultiTTS.</string>
+    <string name="narration_speed_hint">Voice and speed are controlled by the selected TTS engine.</string>
     <string name="narration_play">Play</string>
     <string name="narration_pause">Pause</string>
     <string name="narration_resume">Resume</string>
@@ -105,5 +95,10 @@
     <string name="narration_no_text">No readable text was found from this position.</string>
     <string name="narration_audio_focus_failed">Another app is using audio playback.</string>
     <string name="narration_synthesis_failed">Speech synthesis failed.</string>
+    <string name="narration_tts_error">TTS engine error (%1$d).</string>
+    <string name="narration_segment_progress">Segment %1$d of %2$d</string>
+    <string name="narration_start_delay">Last start wait: %1$d ms</string>
+    <string name="narration_gap">Last segment gap: %1$d ms</string>
+    <string name="narration_queue">Queued segments: %1$d (peak %2$d)</string>
     <string name="narration_notification_channel">Read-aloud playback</string>
 </resources>

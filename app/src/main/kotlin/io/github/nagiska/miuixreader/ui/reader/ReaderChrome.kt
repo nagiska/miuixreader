@@ -74,7 +74,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -91,22 +90,16 @@ import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.vibrancy
 import io.github.nagiska.miuixreader.R
 import io.github.nagiska.miuixreader.data.BookmarkEntity
-import io.github.nagiska.miuixreader.data.MAX_GSV_PORT
 import io.github.nagiska.miuixreader.data.MIN_FONT_SCALE
 import io.github.nagiska.miuixreader.data.MAX_FONT_SCALE
 import io.github.nagiska.miuixreader.data.MAX_IMAGE_SCRIM
-import io.github.nagiska.miuixreader.data.MAX_NARRATION_RATE
-import io.github.nagiska.miuixreader.data.MIN_GSV_PORT
 import io.github.nagiska.miuixreader.data.MIN_IMAGE_SCRIM
-import io.github.nagiska.miuixreader.data.MIN_NARRATION_RATE
-import io.github.nagiska.miuixreader.data.NarrationEngine
 import io.github.nagiska.miuixreader.data.ReaderBackgroundMode
 import io.github.nagiska.miuixreader.data.ReaderFontFamily
 import io.github.nagiska.miuixreader.data.ReaderPreferences
 import io.github.nagiska.miuixreader.data.contrastTextColor
 import io.github.nagiska.miuixreader.ui.LocalLiquidGlassOpacity
 import io.github.nagiska.miuixreader.ui.stringResourceCompat
-import io.github.nagiska.miuixreader.tts.GsvEndpointStatus
 import io.github.nagiska.miuixreader.tts.NarrationPhase
 import io.github.nagiska.miuixreader.tts.NarrationPlaybackState
 import kotlinx.coroutines.CancellationException
@@ -255,14 +248,8 @@ fun ReaderChrome(
     searchAvailable: Boolean = true,
     narrationAvailable: Boolean = false,
     narrationState: NarrationPlaybackState = NarrationPlaybackState(),
-    gsvStatus: GsvEndpointStatus? = null,
     onNarrationToggle: () -> Unit = {},
     onNarrationStop: () -> Unit = {},
-    onNarrationEngineChange: (NarrationEngine) -> Unit = {},
-    onNarrationRateChange: (Float) -> Unit = {},
-    onGsvPortChange: (Int) -> Unit = {},
-    onRefreshGsvStatus: () -> Unit = {},
-    onOpenGsv: () -> Unit = {},
 ) {
     chrome.AutoHide(enabled = autoHideEnabled)
     LaunchedEffect(chrome.visible) {
@@ -456,20 +443,14 @@ fun ReaderChrome(
         )
         ReaderNarrationSheet(
             show = chrome.panel == ReaderPanel.NARRATION,
-            preferences = preferences,
+            liquidGlassEnabled = preferences.liquidGlassEnabled,
             state = narrationState,
-            gsvStatus = gsvStatus,
             backdrop = backdrop,
             colors = chromeColors,
             onDismiss = chrome::closePanel,
             backProgress = sheetBackProgress,
             onToggle = onNarrationToggle,
             onStop = onNarrationStop,
-            onEngineChange = onNarrationEngineChange,
-            onRateChange = onNarrationRateChange,
-            onPortChange = onGsvPortChange,
-            onRefreshGsvStatus = onRefreshGsvStatus,
-            onOpenGsv = onOpenGsv,
         )
         ReaderProgressSheet(
             show = chrome.panel == ReaderPanel.PROGRESS,
@@ -1126,39 +1107,19 @@ private fun ReaderBackgroundSheet(
 @Composable
 private fun ReaderNarrationSheet(
     show: Boolean,
-    preferences: ReaderPreferences,
+    liquidGlassEnabled: Boolean,
     state: NarrationPlaybackState,
-    gsvStatus: GsvEndpointStatus?,
     backdrop: Backdrop,
     colors: Colors,
     onDismiss: () -> Unit,
     onToggle: () -> Unit,
     onStop: () -> Unit,
-    onEngineChange: (NarrationEngine) -> Unit,
-    onRateChange: (Float) -> Unit,
-    onPortChange: (Int) -> Unit,
-    onRefreshGsvStatus: () -> Unit,
-    onOpenGsv: () -> Unit,
     backProgress: Float = 0f,
 ) {
-    var localRate by remember(preferences.narrationRate) {
-        mutableFloatStateOf(preferences.narrationRate)
-    }
-    val locale = LocalLocale.current.platformLocale
-    var portText by remember(preferences.gsvPort) { mutableStateOf(preferences.gsvPort.toString()) }
-    LaunchedEffect(
-        show,
-        preferences.narrationEngine,
-        preferences.gsvPort,
-    ) {
-        if (show && preferences.narrationEngine == NarrationEngine.GSV_LOCAL) {
-            onRefreshGsvStatus()
-        }
-    }
     ReaderGlassSheet(
         show = show,
         title = stringResourceCompat(R.string.narration),
-        liquidGlassEnabled = preferences.liquidGlassEnabled,
+        liquidGlassEnabled = liquidGlassEnabled,
         backdrop = backdrop,
         colors = colors,
         onDismiss = onDismiss,
@@ -1170,71 +1131,36 @@ private fun ReaderNarrationSheet(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(stringResourceCompat(R.string.narration_engine), style = MiuixTheme.textStyles.body1)
-            TabRowWithContour(
-                tabs = listOf(
-                    stringResourceCompat(R.string.narration_engine_system),
-                    stringResourceCompat(R.string.narration_engine_gsv),
-                ),
-                selectedTabIndex = preferences.narrationEngine.ordinal,
-                onTabSelected = { index ->
-                    NarrationEngine.entries.getOrNull(index)?.let(onEngineChange)
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            SliderPreference(
-                value = localRate,
-                onValueChange = { value ->
-                    localRate = value
-                    onRateChange(value)
-                },
-                title = stringResourceCompat(R.string.narration_rate),
-                valueText = String.format(locale, "%.1fx", localRate),
-                valueRange = MIN_NARRATION_RATE..MAX_NARRATION_RATE,
-                steps = 14,
-                showKeyPoints = false,
-            )
-            if (preferences.narrationEngine == NarrationEngine.GSV_LOCAL) {
-                TextField(
-                    value = portText,
-                    onValueChange = { value ->
-                        val filtered = value.filter(Char::isDigit).take(5)
-                        portText = filtered
-                        filtered.toIntOrNull()
-                            ?.takeIf { it in MIN_GSV_PORT..MAX_GSV_PORT }
-                            ?.let(onPortChange)
-                    },
-                    label = stringResourceCompat(R.string.narration_gsv_port),
-                    useLabelAsPlaceholder = false,
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                val statusText = when {
-                    gsvStatus == null -> stringResourceCompat(R.string.narration_gsv_checking)
-                    gsvStatus.reachable && gsvStatus.ready -> stringResourceCompat(
-                        R.string.narration_gsv_ready,
-                        gsvStatus.backendName.ifBlank { "GSV Mobile" },
-                    )
-                    gsvStatus.reachable -> stringResourceCompat(R.string.narration_gsv_not_ready)
-                    else -> stringResourceCompat(
-                        R.string.narration_gsv_unreachable_detail,
-                        gsvStatus.errorMessage.orEmpty(),
-                    )
-                }
-                Text(statusText, style = MiuixTheme.textStyles.body2)
-                TextButton(
-                    text = stringResourceCompat(R.string.narration_open_gsv),
-                    onClick = onOpenGsv,
-                )
-            }
-            state.errorMessage?.takeIf(String::isNotBlank)?.let { error ->
-                Text(error, style = MiuixTheme.textStyles.body2)
-            }
-            state.backendName.takeIf(String::isNotBlank)?.let { backend ->
+            Text(stringResourceCompat(R.string.narration_system_summary), style = MiuixTheme.textStyles.body2)
+            Text(stringResourceCompat(R.string.narration_speed_hint), style = MiuixTheme.textStyles.body2)
+            state.segmentCount.takeIf { it > 0 }?.let { count ->
                 Text(
-                    stringResourceCompat(R.string.narration_backend, backend),
+                    stringResourceCompat(
+                        R.string.narration_segment_progress,
+                        (state.segmentIndex + 1).coerceAtMost(count),
+                        count,
+                    ),
                     style = MiuixTheme.textStyles.body2,
                 )
+            }
+            state.lastStartDelayMillis?.let { delay ->
+                Text(
+                    stringResourceCompat(R.string.narration_start_delay, delay),
+                    style = MiuixTheme.textStyles.body2,
+                )
+            }
+            state.lastGapMillis?.let { gap ->
+                Text(
+                    stringResourceCompat(R.string.narration_gap, gap),
+                    style = MiuixTheme.textStyles.body2,
+                )
+            }
+            Text(
+                stringResourceCompat(R.string.narration_queue, state.queueDepth, state.maxQueueDepth),
+                style = MiuixTheme.textStyles.body2,
+            )
+            state.errorMessage?.takeIf(String::isNotBlank)?.let { error ->
+                Text(error, style = MiuixTheme.textStyles.body2)
             }
             Row(
                 modifier = Modifier.fillMaxWidth(),

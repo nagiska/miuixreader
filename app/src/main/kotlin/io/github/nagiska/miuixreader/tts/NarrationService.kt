@@ -11,49 +11,49 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaMetadata
-import android.media.MediaPlayer
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import io.github.nagiska.miuixreader.R
 import io.github.nagiska.miuixreader.ReaderActivity
 import io.github.nagiska.miuixreader.ReaderApplication
-import io.github.nagiska.miuixreader.data.NarrationEngine
-import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
+/** Background playback coordinator for the Android TTS engine selected by the user. */
 class NarrationService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val progressWriteMutex = Mutex()
     private lateinit var audioManager: AudioManager
     private lateinit var mediaSession: MediaSession
     private lateinit var audioFocusRequest: AudioFocusRequest
     private var wakeLock: PowerManager.WakeLock? = null
-    private var playbackJob: Job? = null
-    private var synthesizer: NarrationSynthesizer? = null
-    private var player: MediaPlayer? = null
-    private var playerPrepared = false
+    private var startupJob: Job? = null
+    private var tts: SystemTtsSynthesizer? = null
     private var activeSession: NarrationSession? = null
     private var activeGeneration = 0L
-    private val paused = MutableStateFlow(false)
+    private var nextIndex = 0
+    private var currentSegmentIndex = -1
+    private var resumeIndex = 0
+    private var paused = false
     private var resumeOnFocusGain = false
+    private var lastDoneAt = 0L
+    private var queueWindow = INITIAL_QUEUE_WINDOW
+    private val pending = linkedMapOf<String, PendingSegment>()
 
     override fun onCreate() {
         super.onCreate()
@@ -73,7 +73,6 @@ class NarrationService : Service() {
             .setOnAudioFocusChangeListener { change -> onAudioFocusChanged(change) }
             .setWillPauseWhenDucked(true)
             .build()
-        cleanupNarrationCache()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -99,10 +98,16 @@ class NarrationService : Service() {
     private fun startSession(session: NarrationSession) {
         activeGeneration++
         val generation = activeGeneration
-        playbackJob?.cancel()
+        startupJob?.cancel()
         releaseSessionResources()
         activeSession = session
-        paused.value = false
+        nextIndex = 0
+        currentSegmentIndex = -1
+        resumeIndex = 0
+        paused = false
+        resumeOnFocusGain = false
+        lastDoneAt = 0L
+        queueWindow = INITIAL_QUEUE_WINDOW
         mediaSession.isActive = true
         mediaSession.setMetadata(
             MediaMetadata.Builder()
@@ -122,10 +127,13 @@ class NarrationService : Service() {
                 segmentCount = session.segments.size,
             ),
         )
-        playbackJob = serviceScope.launch {
+        startupJob = serviceScope.launch {
             try {
-                playSession(session, generation)
-                if (generation == activeGeneration) finishSession()
+                val engine = SystemTtsSynthesizer(this@NarrationService, ttsListener)
+                tts = engine
+                engine.awaitReady()
+                if (generation != activeGeneration) return@launch
+                enqueueWindow(generation, flushFirst = true)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -135,155 +143,166 @@ class NarrationService : Service() {
                         error.message ?: getString(R.string.narration_synthesis_failed),
                     )
                 }
-            } finally {
-                if (generation == activeGeneration) releaseSessionResources()
             }
         }
     }
 
-    private suspend fun playSession(session: NarrationSession, generation: Long) = coroutineScope {
-        require(session.segments.isNotEmpty()) { getString(R.string.narration_no_text) }
-        val engine = when (session.engine) {
-            NarrationEngine.SYSTEM -> SystemTtsSynthesizer(this@NarrationService, session.rate)
-            NarrationEngine.GSV_LOCAL -> GsvLocalClient(session.gsvPort, session.rate).also { client ->
-                val status = client.checkStatus()
-                require(status.reachable) {
-                    status.errorMessage ?: getString(R.string.narration_gsv_unreachable)
-                }
-                require(status.ready) {
-                    status.errorMessage ?: getString(R.string.narration_gsv_not_ready)
-                }
-                updateState(currentState.value.copy(backendName = status.backendName))
-            }
-        }
-        synthesizer = engine
-        val sessionDirectory = File(cacheDir, "narration/${UUID.randomUUID()}").apply { mkdirs() }
-        var index = 0
-        var prepared = async {
-            synthesizeSegment(engine, session.segments[index], sessionDirectory, index)
+    private val ttsListener = object : SystemTtsSynthesizer.Listener {
+        override fun onStart(utteranceId: String) {
+            serviceScope.launch { handleTtsStart(utteranceId) }
         }
 
-        while (index < session.segments.size && generation == activeGeneration) {
-            val segment = session.segments[index]
-            updateState(
-                currentState.value.copy(
-                    phase = if (paused.value) {
-                        NarrationPhase.PAUSED
-                    } else if (index == 0) {
-                        NarrationPhase.PREPARING
-                    } else {
-                        NarrationPhase.BUFFERING
-                    },
-                    segmentIndex = index,
-                    anchor = segment.anchor,
-                    errorMessage = null,
-                ),
+        override fun onDone(utteranceId: String) {
+            serviceScope.launch { handleTtsDone(utteranceId) }
+        }
+
+        override fun onStop(utteranceId: String, interrupted: Boolean) {
+            serviceScope.launch { handleTtsStop(utteranceId, interrupted) }
+        }
+
+        override fun onError(utteranceId: String, errorCode: Int) {
+            serviceScope.launch { handleTtsError(utteranceId, errorCode) }
+        }
+    }
+
+    private fun enqueueWindow(generation: Long, flushFirst: Boolean) {
+        val session = activeSession ?: return
+        if (generation != activeGeneration || paused) return
+        val engine = tts ?: error("TTS engine is not initialized")
+        while (nextIndex < session.segments.size && pending.size < queueWindow) {
+            val index = nextIndex
+            val id = "g$generation-s$index-${UUID.randomUUID()}"
+            val shouldFlush = flushFirst && pending.isEmpty()
+            pending[id] = PendingSegment(
+                index = index,
+                submittedAt = SystemClock.elapsedRealtime(),
             )
-            val audio = prepared.await()
-            paused.first { !it }
-            if (generation != activeGeneration) break
-            val next = if (index + 1 < session.segments.size) {
-                async {
-                    synthesizeSegment(
-                        engine,
-                        session.segments[index + 1],
-                        sessionDirectory,
-                        index + 1,
-                    )
-                }
-            } else {
-                null
-            }
-            updateState(
-                currentState.value.copy(
-                    phase = NarrationPhase.PLAYING,
-                    segmentIndex = index,
-                    anchor = segment.anchor,
-                    backendName = audio.backendName,
-                ),
+            val accepted = engine.enqueue(
+                utteranceId = id,
+                text = session.segments[index].text,
+                flush = shouldFlush,
             )
-            persistProgress(session.bookId, segment.anchor)
-            try {
-                playAudio(audio.file)
-            } finally {
-                audio.file.delete()
-            }
-            index++
-            if (next != null) prepared = next
+            if (!accepted) pending.remove(id)
+            check(accepted) { "System TTS rejected the narration request" }
+            nextIndex++
         }
-        sessionDirectory.deleteRecursively()
+        updateQueueState()
     }
 
-    private suspend fun synthesizeSegment(
-        engine: NarrationSynthesizer,
-        segment: NarrationSegment,
-        directory: File,
-        index: Int,
-    ): SynthesizedNarrationAudio = engine.synthesize(
-        segment.text,
-        File(directory, "segment-$index.wav"),
-    )
-
-    private suspend fun playAudio(file: File) {
-        suspendCancellableCoroutine<Unit> { continuation ->
-            val mediaPlayer = MediaPlayer()
-            try {
-                mediaPlayer.setAudioAttributes(playbackAudioAttributes)
-                mediaPlayer.setWakeMode(this@NarrationService, PowerManager.PARTIAL_WAKE_LOCK)
-                mediaPlayer.setDataSource(file.absolutePath)
-                mediaPlayer.setOnPreparedListener { preparedPlayer ->
-                    playerPrepared = true
-                    if (!paused.value) preparedPlayer.start()
-                }
-                mediaPlayer.setOnCompletionListener {
-                    releasePlayer()
-                    if (continuation.isActive) continuation.resume(Unit)
-                }
-                mediaPlayer.setOnErrorListener { _, what, extra ->
-                    releasePlayer()
-                    if (continuation.isActive) {
-                        continuation.resumeWithException(
-                            IllegalStateException("Audio playback failed ($what/$extra)"),
-                        )
-                    }
-                    true
-                }
-                player = mediaPlayer
-                continuation.invokeOnCancellation { releasePlayer() }
-                mediaPlayer.prepareAsync()
-            } catch (error: Exception) {
-                if (player === mediaPlayer) {
-                    player = null
-                    playerPrepared = false
-                }
-                runCatching { mediaPlayer.release() }
-                if (continuation.isActive) continuation.resumeWithException(error)
+    private fun handleTtsStart(utteranceId: String) {
+        val item = pending[utteranceId] ?: return
+        val session = activeSession ?: return
+        val now = SystemClock.elapsedRealtime()
+        currentSegmentIndex = item.index
+        val startDelay = (now - item.submittedAt).coerceAtLeast(0L)
+        val gap = if (lastDoneAt == 0L) null else (now - lastDoneAt).coerceAtLeast(0L)
+        if (gap != null) {
+            queueWindow = when {
+                gap > GAP_GROW_THRESHOLD_MILLIS -> (queueWindow + 1).coerceAtMost(MAX_QUEUE_WINDOW)
+                gap < GAP_SHRINK_THRESHOLD_MILLIS -> (queueWindow - 1).coerceAtLeast(INITIAL_QUEUE_WINDOW)
+                else -> queueWindow
             }
         }
+        updateState(
+            currentState.value.copy(
+                bookId = session.bookId,
+                title = session.title,
+                phase = NarrationPhase.PLAYING,
+                segmentIndex = item.index,
+                segmentCount = session.segments.size,
+                anchor = session.segments[item.index].anchor,
+                queueDepth = (pending.size - 1).coerceAtLeast(0),
+                lastStartDelayMillis = startDelay,
+                lastGapMillis = gap,
+                maxQueueDepth = maxOf(currentState.value.maxQueueDepth, pending.size),
+                errorMessage = null,
+            ),
+        )
+        persistProgress(session.bookId, session.segments[item.index].anchor)
     }
 
-    private fun pausePlayback() {
+    private fun handleTtsDone(utteranceId: String) {
+        val item = pending.remove(utteranceId) ?: return
+        lastDoneAt = SystemClock.elapsedRealtime()
+        val session = activeSession ?: return
+        if (paused) return
+        if (pending.isEmpty() && nextIndex >= session.segments.size) {
+            finishSession()
+            return
+        }
+        runCatching { enqueueWindow(activeGeneration, flushFirst = false) }
+            .onFailure { error ->
+                failSession(
+                    session,
+                    error.message ?: getString(R.string.narration_synthesis_failed),
+                )
+            }
+        updateQueueState()
+    }
+
+    private fun handleTtsStop(utteranceId: String, interrupted: Boolean) {
+        if (pending.remove(utteranceId) == null) return
+        if (paused) return
+        val session = activeSession ?: return
+        failSession(
+            session,
+            getString(R.string.narration_synthesis_failed),
+        )
+    }
+
+    private fun handleTtsError(utteranceId: String, errorCode: Int) {
+        if (pending.remove(utteranceId) == null) return
+        val session = activeSession ?: return
+        failSession(
+            session,
+            getString(R.string.narration_tts_error, errorCode),
+        )
+    }
+
+    private fun pausePlayback(fromAudioFocusLoss: Boolean = false) {
+        val session = activeSession ?: return
         val state = currentState.value
-        if (!state.isActive || state.phase == NarrationPhase.PAUSED) return
-        paused.value = true
-        if (playerPrepared) runCatching { player?.pause() }
-        updateState(state.copy(phase = NarrationPhase.PAUSED))
+        if (!state.isActive || paused) return
+        if (!fromAudioFocusLoss) resumeOnFocusGain = false
+        resumeIndex = when {
+            currentSegmentIndex >= 0 -> currentSegmentIndex
+            pending.isNotEmpty() -> pending.values.minOf { it.index }
+            else -> nextIndex
+        }.coerceIn(0, session.segments.lastIndex.coerceAtLeast(0))
+        paused = true
+        tts?.stop()
+        pending.clear()
+        updateState(state.copy(phase = NarrationPhase.PAUSED, queueDepth = 0))
     }
 
     private fun resumePlayback() {
-        val state = currentState.value
-        if (state.phase != NarrationPhase.PAUSED) return
-        paused.value = false
-        if (playerPrepared) runCatching { player?.start() }
-        updateState(
-            state.copy(phase = if (playerPrepared) NarrationPhase.PLAYING else NarrationPhase.BUFFERING),
-        )
+        val session = activeSession ?: return
+        if (currentState.value.phase != NarrationPhase.PAUSED) return
+        paused = false
+        pending.clear()
+        nextIndex = resumeIndex.coerceIn(0, session.segments.size)
+        currentSegmentIndex = -1
+        lastDoneAt = 0L
+        queueWindow = INITIAL_QUEUE_WINDOW
+        if (tts == null) {
+            startSession(session)
+            return
+        }
+        updateState(currentState.value.copy(phase = NarrationPhase.PREPARING, queueDepth = 0))
+        runCatching { enqueueWindow(activeGeneration, flushFirst = true) }
+            .onFailure { error ->
+                failSession(
+                    session,
+                    error.message ?: getString(R.string.narration_synthesis_failed),
+                )
+            }
     }
 
     private fun stopSession() {
         activeGeneration++
-        playbackJob?.cancel()
-        playbackJob = null
+        resumeOnFocusGain = false
+        startupJob?.cancel()
+        startupJob = null
         releaseSessionResources()
         activeSession = null
         updateState(NarrationPlaybackState())
@@ -293,95 +312,49 @@ class NarrationService : Service() {
 
     private fun finishSession() {
         activeGeneration++
+        resumeOnFocusGain = false
+        startupJob?.cancel()
+        startupJob = null
+        releaseSessionResources()
         activeSession = null
         updateState(NarrationPlaybackState())
-        releaseSessionResources()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     private fun failSession(session: NarrationSession, message: String) {
+        if (activeSession?.bookId != session.bookId) return
         activeGeneration++
-        playbackJob?.cancel()
-        playbackJob = null
+        resumeOnFocusGain = false
+        startupJob?.cancel()
+        startupJob = null
+        pending.clear()
         updateState(
             NarrationPlaybackState(
                 bookId = session.bookId,
                 title = session.title,
                 phase = NarrationPhase.ERROR,
+                segmentIndex = currentSegmentIndex.coerceAtLeast(0),
                 segmentCount = session.segments.size,
+                queueDepth = 0,
                 errorMessage = message,
             ),
         )
         releaseSessionResources()
+        activeSession = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
-    private fun releaseSessionResources() {
-        synthesizer?.cancel()
-        synthesizer?.close()
-        synthesizer = null
-        releasePlayer()
-        runCatching { audioManager.abandonAudioFocusRequest(audioFocusRequest) }
-        mediaSession.isActive = false
-        wakeLock?.takeIf { it.isHeld }?.release()
-        wakeLock = null
-        cleanupNarrationCache()
-    }
-
-    private fun releasePlayer() {
-        playerPrepared = false
-        player?.apply {
-            setOnPreparedListener(null)
-            setOnCompletionListener(null)
-            setOnErrorListener(null)
-            runCatching { stop() }
-            release()
-        }
-        player = null
-    }
-
-    private fun persistProgress(bookId: Long, anchor: NarrationAnchor) {
-        serviceScope.launch(Dispatchers.IO) {
-            val progression = when (anchor) {
-                is NarrationAnchor.Publication -> anchor.locatorJson
-                is NarrationAnchor.Txt -> "txt2:${anchor.itemIndex}:${anchor.offsetFraction.coerceIn(0f, 1f)}"
-            }
-            (application as ReaderApplication).books.saveProgression(bookId, progression)
-        }
-    }
-
-    private fun acquireWakeLock() {
-        wakeLock = getSystemService(PowerManager::class.java)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:narration")
-            .apply {
-                setReferenceCounted(false)
-                acquire(MAX_WAKE_LOCK_MILLIS)
-            }
-    }
-
-    private fun onAudioFocusChanged(change: Int) {
-        when (change) {
-            AudioManager.AUDIOFOCUS_LOSS -> {
-                resumeOnFocusGain = false
-                stopSession()
-            }
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
-                resumeOnFocusGain = currentState.value.phase == NarrationPhase.PLAYING
-                pausePlayback()
-            }
-            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                runCatching { player?.setVolume(0.2f, 0.2f) }
-            }
-            AudioManager.AUDIOFOCUS_GAIN -> {
-                runCatching { player?.setVolume(1f, 1f) }
-                if (resumeOnFocusGain) {
-                    resumeOnFocusGain = false
-                    resumePlayback()
-                }
-            }
-        }
+    private fun updateQueueState() {
+        val state = currentState.value
+        if (!state.isActive) return
+        updateState(
+            state.copy(
+                queueDepth = (pending.size - 1).coerceAtLeast(0),
+                maxQueueDepth = maxOf(state.maxQueueDepth, pending.size),
+            ),
+        )
     }
 
     private fun updateState(state: NarrationPlaybackState) {
@@ -390,6 +363,19 @@ class NarrationService : Service() {
         if (activeSession != null) {
             getSystemService(NotificationManager::class.java)
                 .notify(NOTIFICATION_ID, buildNotification(state.title, state.phase))
+        }
+    }
+
+    private fun persistProgress(bookId: Long, anchor: NarrationAnchor) {
+        serviceScope.launch(Dispatchers.IO) {
+            progressWriteMutex.withLock {
+                val progression = when (anchor) {
+                    is NarrationAnchor.Publication -> anchor.locatorJson
+                    is NarrationAnchor.Txt ->
+                        "txt2:${anchor.itemIndex}:${anchor.offsetFraction.coerceIn(0f, 1f)}"
+                }
+                (application as ReaderApplication).books.saveProgression(bookId, progression)
+            }
         }
     }
 
@@ -409,6 +395,45 @@ class NarrationService : Service() {
                 .setState(playbackState, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
                 .build(),
         )
+    }
+
+    private fun onAudioFocusChanged(change: Int) {
+        when (change) {
+            AudioManager.AUDIOFOCUS_LOSS -> stopSession()
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+                resumeOnFocusGain = currentState.value.phase in setOf(
+                    NarrationPhase.PREPARING,
+                    NarrationPhase.BUFFERING,
+                    NarrationPhase.PLAYING,
+                )
+                pausePlayback(fromAudioFocusLoss = true)
+            }
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                if (resumeOnFocusGain) {
+                    resumeOnFocusGain = false
+                    resumePlayback()
+                }
+            }
+        }
+    }
+
+    private fun releaseSessionResources() {
+        tts?.close()
+        tts = null
+        pending.clear()
+        runCatching { audioManager.abandonAudioFocusRequest(audioFocusRequest) }
+        mediaSession.isActive = false
+        wakeLock?.takeIf { it.isHeld }?.release()
+        wakeLock = null
+    }
+
+    private fun acquireWakeLock() {
+        wakeLock = getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:narration")
+            .apply {
+                setReferenceCounted(false)
+                acquire(MAX_WAKE_LOCK_MILLIS)
+            }
     }
 
     private fun buildNotification(title: String, phase: NarrationPhase): Notification {
@@ -477,21 +502,21 @@ class NarrationService : Service() {
         )
     }
 
-    private fun cleanupNarrationCache() {
-        File(cacheDir, "narration").deleteRecursively()
-    }
-
     override fun onDestroy() {
         activeGeneration++
-        playbackJob?.cancel()
+        startupJob?.cancel()
         synchronized(pendingLock) { pendingSession = null }
-        activeSession = null
         releaseSessionResources()
         mediaSession.release()
         _state.value = NarrationPlaybackState()
         serviceScope.cancel()
         super.onDestroy()
     }
+
+    private data class PendingSegment(
+        val index: Int,
+        val submittedAt: Long,
+    )
 
     companion object {
         private const val ACTION_START = "io.github.nagiska.miuixreader.tts.START"
@@ -501,6 +526,10 @@ class NarrationService : Service() {
         private const val NOTIFICATION_CHANNEL = "narration-playback"
         private const val NOTIFICATION_ID = 2107
         private const val MEDIA_SESSION_TAG = "MiuixReaderNarration"
+        private const val INITIAL_QUEUE_WINDOW = 4
+        private const val MAX_QUEUE_WINDOW = 8
+        private const val GAP_GROW_THRESHOLD_MILLIS = 250L
+        private const val GAP_SHRINK_THRESHOLD_MILLIS = 80L
         private const val MAX_WAKE_LOCK_MILLIS = 6L * 60L * 60L * 1_000L
 
         private val pendingLock = Any()

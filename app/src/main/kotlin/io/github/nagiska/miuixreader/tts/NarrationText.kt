@@ -17,6 +17,7 @@ data class PublicationNarrationBlock(
     val locatorJson: String,
     val href: String,
     val progression: Double?,
+    val highlight: String? = null,
 )
 
 private val collapsedWhitespace = Regex("\\s+")
@@ -146,10 +147,27 @@ internal fun findPublicationStartBlock(
     blocks: List<PublicationNarrationBlock>,
     href: String?,
     progression: Double?,
+    highlight: String? = null,
 ): Int {
     if (blocks.isEmpty() || href == null) return 0
-    val matching = blocks.indices.filter { blocks[it].href == href }
-    if (matching.isEmpty()) return 0
+    val normalizedHref = href.substringBefore('#').substringBefore('?')
+    val matching = blocks.indices.filter {
+        it.href.substringBefore('#').substringBefore('?') == normalizedHref
+    }
+    val targetText = highlight?.takeIf(String::isNotBlank)
+    if (matching.isEmpty()) {
+        if (targetText != null) {
+            blocks.indexOfFirst { it.text.contains(targetText) || it.highlight == targetText }
+                .takeIf { it >= 0 }
+                ?.let { return it }
+        }
+        return 0
+    }
+    if (targetText != null) {
+        matching.firstOrNull { index ->
+            blocks[index].text.contains(targetText) || blocks[index].highlight == targetText
+        }?.let { return it }
+    }
     if (progression == null) return matching.first()
     return matching.lastOrNull { index ->
         val blockProgression = blocks[index].progression
@@ -161,10 +179,17 @@ internal fun buildPublicationNarrationSegments(
     blocks: List<PublicationNarrationBlock>,
     href: String?,
     progression: Double?,
+    highlight: String? = null,
 ): List<NarrationSegment> {
-    val firstBlock = findPublicationStartBlock(blocks, href, progression)
-    return blocks.drop(firstBlock).flatMap { block ->
-        splitNarrationText(block.text).map { slice ->
+    val firstBlock = findPublicationStartBlock(blocks, href, progression, highlight)
+    return blocks.drop(firstBlock).flatMapIndexed { offset, block ->
+        val text = if (offset == 0 && !highlight.isNullOrBlank()) {
+            val highlightStart = block.text.indexOf(highlight)
+            if (highlightStart >= 0) block.text.substring(highlightStart) else block.text
+        } else {
+            block.text
+        }
+        splitNarrationText(text).map { slice ->
             NarrationSegment(slice.text, NarrationAnchor.Publication(block.locatorJson))
         }
     }

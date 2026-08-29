@@ -31,4 +31,7 @@ interface BookDao {
 
     @Query("UPDATE books SET coverPath = :coverPath WHERE id = :id")
     suspend fun updateCoverPath(id: Long, coverPath: String?): Int
+
+    @Query("UPDATE books SET progression = :progression, lastOpenedAt = :lastOpenedAt WHERE id = :id")
+    suspend fun updateProgression(id: Long, progression: String, lastOpenedAt: Long): Int
 }

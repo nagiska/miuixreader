@@ -40,9 +40,6 @@ class ReaderSettings(private val context: Context) {
     private val fontFamilyKey = stringPreferencesKey("reader_font_family")
     private val fontScaleKey = floatPreferencesKey("reader_font_scale")
     private val fontWeightKey = intPreferencesKey("reader_font_weight")
-    private val narrationEngineKey = stringPreferencesKey("narration_engine")
-    private val narrationRateKey = floatPreferencesKey("narration_rate")
-    private val gsvPortKey = intPreferencesKey("gsv_port")
 
     val preferences: Flow<ReaderPreferences> = context.readerSettingsDataStore.data
         .catch { error ->
@@ -79,14 +76,6 @@ class ReaderSettings(private val context: Context) {
                     fontFamily = values[fontFamilyKey].enumValueOrDefault(ReaderFontFamily.ORIGINAL),
                     fontScale = values[fontScaleKey]?.coerceIn(MIN_FONT_SCALE, MAX_FONT_SCALE) ?: 1f,
                     fontWeight = values[fontWeightKey]?.coerceIn(300, 700) ?: 400,
-                    narrationEngine = values[narrationEngineKey]
-                        .enumValueOrDefault(NarrationEngine.SYSTEM),
-                    narrationRate = values[narrationRateKey]
-                        ?.coerceIn(MIN_NARRATION_RATE, MAX_NARRATION_RATE)
-                        ?: 1f,
-                    gsvPort = values[gsvPortKey]
-                        ?.coerceIn(MIN_GSV_PORT, MAX_GSV_PORT)
-                        ?: DEFAULT_GSV_PORT,
                 )
             }
         }
@@ -124,22 +113,6 @@ class ReaderSettings(private val context: Context) {
     suspend fun setFontWeight(weight: Int) {
         context.readerSettingsDataStore.edit {
             it[fontWeightKey] = weight.coerceIn(300, 700)
-        }
-    }
-
-    suspend fun setNarrationEngine(engine: NarrationEngine) {
-        context.readerSettingsDataStore.edit { it[narrationEngineKey] = engine.name }
-    }
-
-    suspend fun setNarrationRate(rate: Float) {
-        context.readerSettingsDataStore.edit {
-            it[narrationRateKey] = rate.coerceIn(MIN_NARRATION_RATE, MAX_NARRATION_RATE)
-        }
-    }
-
-    suspend fun setGsvPort(port: Int) {
-        context.readerSettingsDataStore.edit {
-            it[gsvPortKey] = port.coerceIn(MIN_GSV_PORT, MAX_GSV_PORT)
         }
     }
 

@@ -126,8 +126,7 @@ class BookRepository(
     }
 
     suspend fun saveProgression(bookId: Long, progression: String) {
-        val book = dao.getById(bookId) ?: return
-        dao.update(book.copy(progression = progression, lastOpenedAt = System.currentTimeMillis()))
+        dao.updateProgression(bookId, progression, System.currentTimeMillis())
     }
 
     fun observeBookmarks(bookId: Long): Flow<List<BookmarkEntity>> = bookmarkDao.observeByBook(bookId)
