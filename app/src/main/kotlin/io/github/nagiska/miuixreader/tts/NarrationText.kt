@@ -152,7 +152,7 @@ internal fun findPublicationStartBlock(
     if (blocks.isEmpty() || href == null) return 0
     val normalizedHref = href.substringBefore('#').substringBefore('?')
     val matching = blocks.indices.filter {
-        it.href.substringBefore('#').substringBefore('?') == normalizedHref
+        blocks[it].href.substringBefore('#').substringBefore('?') == normalizedHref
     }
     val targetText = highlight?.takeIf(String::isNotBlank)
     if (matching.isEmpty()) {
