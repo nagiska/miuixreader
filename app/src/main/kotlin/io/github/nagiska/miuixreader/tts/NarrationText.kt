@@ -18,6 +18,7 @@ data class PublicationNarrationBlock(
     val href: String,
     val progression: Double?,
     val highlight: String? = null,
+    val cssSelector: String? = null,
 )
 
 private val collapsedWhitespace = Regex("\\s+")
@@ -148,11 +149,16 @@ internal fun findPublicationStartBlock(
     href: String?,
     progression: Double?,
     highlight: String? = null,
+    cssSelector: String? = null,
 ): Int {
     if (blocks.isEmpty() || href == null) return 0
     val normalizedHref = href.substringBefore('#').substringBefore('?')
     val matching = blocks.indices.filter {
         blocks[it].href.substringBefore('#').substringBefore('?') == normalizedHref
+    }
+    val targetSelector = cssSelector?.takeIf(String::isNotBlank)
+    if (targetSelector != null) {
+        matching.firstOrNull { blocks[it].cssSelector == targetSelector }?.let { return it }
     }
     val targetText = highlight?.takeIf(String::isNotBlank)
     if (matching.isEmpty()) {
@@ -180,8 +186,9 @@ internal fun buildPublicationNarrationSegments(
     href: String?,
     progression: Double?,
     highlight: String? = null,
+    cssSelector: String? = null,
 ): List<NarrationSegment> {
-    val firstBlock = findPublicationStartBlock(blocks, href, progression, highlight)
+    val firstBlock = findPublicationStartBlock(blocks, href, progression, highlight, cssSelector)
     return blocks.drop(firstBlock).flatMapIndexed { offset, block ->
         val text = if (offset == 0 && !highlight.isNullOrBlank()) {
             val highlightStart = block.text.indexOf(highlight)

@@ -68,4 +68,35 @@ class NarrationTextTest {
         assertEquals("continue here.", segments.first().text)
         assertEquals(NarrationAnchor.Publication("one"), segments.first().anchor)
     }
+
+    @Test
+    fun publicationPrefersCurrentElementSelectorOverChapterProgression() {
+        val blocks = listOf(
+            PublicationNarrationBlock(
+                "first paragraph",
+                "one",
+                "chapter.xhtml",
+                0.0,
+                cssSelector = "p:nth-of-type(1)",
+            ),
+            PublicationNarrationBlock(
+                "second paragraph",
+                "two",
+                "chapter.xhtml",
+                0.1,
+                cssSelector = "p:nth-of-type(2)",
+            ),
+        )
+
+        assertEquals(
+            1,
+            findPublicationStartBlock(
+                blocks = blocks,
+                href = "chapter.xhtml",
+                progression = 0.0,
+                highlight = "first paragraph second paragraph",
+                cssSelector = "p:nth-of-type(2)",
+            ),
+        )
+    }
 }

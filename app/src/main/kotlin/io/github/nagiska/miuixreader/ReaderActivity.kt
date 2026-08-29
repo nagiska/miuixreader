@@ -369,6 +369,7 @@ class ReaderActivity : FragmentActivity() {
                                     href = locator.href.toString(),
                                     progression = locator.locations.progression,
                                     highlight = locator.text.highlight,
+                                    cssSelector = locator.locations.otherLocations["cssSelector"] as? String,
                                 )
                             }
                         }
@@ -380,6 +381,7 @@ class ReaderActivity : FragmentActivity() {
                         current?.href?.toString(),
                         current?.locations?.progression,
                         current?.text?.highlight,
+                        current?.locations?.otherLocations?.get("cssSelector") as? String,
                     )
                 }
                 startNarrationSession(title, segments)
