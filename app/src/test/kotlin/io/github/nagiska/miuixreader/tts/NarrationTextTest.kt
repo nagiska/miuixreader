@@ -99,4 +99,45 @@ class NarrationTextTest {
             ),
         )
     }
+
+    @Test
+    fun publicationMatchesTheFullVisibleElementWhenSegmentsAreSplit() {
+        val blocks = listOf(
+            PublicationNarrationBlock(
+                text = "first styled fragment",
+                locatorJson = "one",
+                href = "chapter.xhtml",
+                progression = 0.0,
+                elementText = "first styled fragment",
+            ),
+            PublicationNarrationBlock(
+                text = "second styled fragment",
+                locatorJson = "two",
+                href = "chapter.xhtml",
+                progression = 0.1,
+                elementText = "second styled fragment and its full paragraph",
+            ),
+        )
+
+        assertEquals(
+            1,
+            findPublicationStartBlock(
+                blocks = blocks,
+                href = "chapter.xhtml",
+                progression = 0.0,
+                highlight = "second styled fragment and its full paragraph",
+            ),
+        )
+    }
+
+    @Test
+    fun publicationUsesNearestProgressionWhenVisibleTextHasNoContentMatch() {
+        val blocks = listOf(
+            PublicationNarrationBlock("first", "one", "chapter.xhtml", 0.0),
+            PublicationNarrationBlock("middle", "two", "chapter.xhtml", 0.2),
+            PublicationNarrationBlock("last", "three", "chapter.xhtml", 0.8),
+        )
+
+        assertEquals(1, findPublicationStartBlock(blocks, "chapter.xhtml", 0.25, "unavailable"))
+    }
 }

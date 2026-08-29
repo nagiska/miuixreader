@@ -184,6 +184,7 @@ class ReaderActivity : FragmentActivity() {
     private var narrationBuildJob: Job? = null
     private var pendingNarrationStart: (() -> Unit)? = null
     private var lastNarrationLocatorJson: String? = null
+    private var narrationStartNavigationPending = false
     private var typographyRestoreJob: Job? = null
     private var typographyGeneration = 0L
     private var suppressProgression = false
@@ -277,6 +278,7 @@ class ReaderActivity : FragmentActivity() {
         narrationState = state
         if (state.phase != NarrationPhase.PLAYING) {
             if (state.phase in setOf(NarrationPhase.IDLE, NarrationPhase.ERROR)) {
+                narrationStartNavigationPending = false
                 clearNarrationHighlight()
             }
             return
@@ -290,7 +292,13 @@ class ReaderActivity : FragmentActivity() {
         if (anchor.locatorJson == lastNarrationLocatorJson) return
         val locator = runCatching { Locator.fromJSON(JSONObject(anchor.locatorJson)) }.getOrNull() ?: return
         lastNarrationLocatorJson = anchor.locatorJson
-        nav.go(locator, animated = false)
+        if (narrationStartNavigationPending) {
+            // The first segment was selected from the current viewport. Re-loading its locator
+            // here can reset a paginated WebView to the start of the resource.
+            narrationStartNavigationPending = false
+        } else {
+            nav.go(locator, animated = false)
+        }
         val decorable = nav as? DecorableNavigator ?: return
         if (!decorable.supportsDecorationStyle(Decoration.Style.Highlight::class)) return
         lifecycleScope.launch {
@@ -341,6 +349,8 @@ class ReaderActivity : FragmentActivity() {
     private fun startPublicationNarration(title: String) {
         narrationBuildJob?.cancel()
         if (narrationState.isActive) NarrationService.stop(this)
+        clearNarrationHighlight()
+        narrationStartNavigationPending = true
         narrationState = NarrationPlaybackState(
             bookId = currentBookId,
             title = title,
@@ -349,13 +359,24 @@ class ReaderActivity : FragmentActivity() {
         narrationBuildJob = lifecycleScope.launch {
             try {
                 val pub = publication ?: error(getString(R.string.narration_no_text))
-                val publicationContent = pub.content() ?: error(getString(R.string.narration_no_text))
+                val pageLocator = navigator?.currentLocator?.value
                 val current = (navigator as? VisualNavigator)?.firstVisibleElementLocator()
-                    ?: navigator?.currentLocator?.value
+                    ?.let { visibleLocator ->
+                        visibleLocator.copyWithLocations(
+                            progression = visibleLocator.locations.progression
+                                ?: pageLocator?.locations?.progression,
+                            totalProgression = visibleLocator.locations.totalProgression
+                                ?: pageLocator?.locations?.totalProgression,
+                        )
+                    }
+                    ?: pageLocator
+                val publicationContent = pub.content()
+                    ?: error(getString(R.string.narration_no_text))
                 val blocks = withContext(Dispatchers.Default) {
                     publicationContent.elements().flatMap { element ->
                         val textual = element as? Content.TextualElement
                             ?: return@flatMap emptyList<PublicationNarrationBlock>()
+                        val elementText = textual.text
                         val parts = if (textual is Content.TextElement && textual.segments.isNotEmpty()) {
                             textual.segments.map { segment -> segment.text to segment.locator }
                         } else {
@@ -368,8 +389,10 @@ class ReaderActivity : FragmentActivity() {
                                     locatorJson = locator.toJSON().toString(),
                                     href = locator.href.toString(),
                                     progression = locator.locations.progression,
+                                    totalProgression = locator.locations.totalProgression,
                                     highlight = locator.text.highlight,
                                     cssSelector = locator.locations.otherLocations["cssSelector"] as? String,
+                                    elementText = elementText,
                                 )
                             }
                         }
@@ -382,6 +405,7 @@ class ReaderActivity : FragmentActivity() {
                         current?.locations?.progression,
                         current?.text?.highlight,
                         current?.locations?.otherLocations?.get("cssSelector") as? String,
+                        current?.locations?.totalProgression,
                     )
                 }
                 startNarrationSession(title, segments)
@@ -399,6 +423,8 @@ class ReaderActivity : FragmentActivity() {
     private fun startTextNarration(title: String, content: String, startOffset: Int) {
         narrationBuildJob?.cancel()
         if (narrationState.isActive) NarrationService.stop(this)
+        clearNarrationHighlight()
+        narrationStartNavigationPending = false
         narrationState = NarrationPlaybackState(
             bookId = currentBookId,
             title = title,
@@ -443,6 +469,7 @@ class ReaderActivity : FragmentActivity() {
     private fun stopNarrationIfActive() {
         narrationBuildJob?.cancel()
         narrationBuildJob = null
+        narrationStartNavigationPending = false
         if (narrationState.isActive) {
             NarrationService.stop(this)
             narrationState = NarrationPlaybackState()

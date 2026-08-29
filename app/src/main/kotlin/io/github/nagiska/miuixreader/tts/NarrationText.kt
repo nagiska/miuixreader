@@ -17,13 +17,26 @@ data class PublicationNarrationBlock(
     val locatorJson: String,
     val href: String,
     val progression: Double?,
+    val totalProgression: Double? = null,
     val highlight: String? = null,
     val cssSelector: String? = null,
+    val elementText: String? = null,
 )
 
 private val collapsedWhitespace = Regex("\\s+")
 private val strongBoundaries = setOf('.', '!', '?', '\u3002', '\uff01', '\uff1f', '\uff1b', ';')
 private val softBoundaries = setOf(',', '\u3001', '\uff0c', ':', '\uff1a')
+
+private fun normalizedNarrationText(text: String): String =
+    text.replace(collapsedWhitespace, " ").trim()
+
+private fun hrefMatches(first: String, second: String): Boolean {
+    val normalizedFirst = first.substringBefore('#').substringBefore('?').trimStart('.')
+    val normalizedSecond = second.substringBefore('#').substringBefore('?').trimStart('.')
+    return normalizedFirst == normalizedSecond ||
+        normalizedFirst.endsWith("/$normalizedSecond") ||
+        normalizedSecond.endsWith("/$normalizedFirst")
+}
 
 internal fun splitNarrationText(
     text: String,
@@ -150,34 +163,46 @@ internal fun findPublicationStartBlock(
     progression: Double?,
     highlight: String? = null,
     cssSelector: String? = null,
+    totalProgression: Double? = null,
 ): Int {
     if (blocks.isEmpty() || href == null) return 0
     val normalizedHref = href.substringBefore('#').substringBefore('?')
     val matching = blocks.indices.filter {
-        blocks[it].href.substringBefore('#').substringBefore('?') == normalizedHref
+        hrefMatches(blocks[it].href, normalizedHref)
     }
     val targetSelector = cssSelector?.takeIf(String::isNotBlank)
     if (targetSelector != null) {
         matching.firstOrNull { blocks[it].cssSelector == targetSelector }?.let { return it }
     }
-    val targetText = highlight?.takeIf(String::isNotBlank)
+    val targetText = highlight?.takeIf(String::isNotBlank)?.let(::normalizedNarrationText)
+    fun matchesTarget(index: Int): Boolean {
+        val block = blocks[index]
+        return listOfNotNull(block.elementText, block.text, block.highlight)
+            .any { candidate -> normalizedNarrationText(candidate).contains(targetText.orEmpty()) }
+    }
     if (matching.isEmpty()) {
         if (targetText != null) {
-            blocks.indexOfFirst { it.text.contains(targetText) || it.highlight == targetText }
+            blocks.indexOfFirst(::matchesTarget)
                 .takeIf { it >= 0 }
                 ?.let { return it }
+        }
+        if (targetSelector != null) {
+            val selectorMatches = blocks.indices.filter { blocks[it].cssSelector == targetSelector }
+            if (selectorMatches.size == 1) return selectorMatches.single()
+        }
+        if (totalProgression != null) {
+            blocks.indices.minByOrNull { index ->
+                kotlin.math.abs((blocks[index].totalProgression ?: 0.0) - totalProgression)
+            }?.let { return it }
         }
         return 0
     }
     if (targetText != null) {
-        matching.firstOrNull { index ->
-            blocks[index].text.contains(targetText) || blocks[index].highlight == targetText
-        }?.let { return it }
+        matching.firstOrNull(::matchesTarget)?.let { return it }
     }
     if (progression == null) return matching.first()
-    return matching.lastOrNull { index ->
-        val blockProgression = blocks[index].progression
-        blockProgression != null && blockProgression <= progression
+    return matching.minByOrNull { index ->
+        kotlin.math.abs((blocks[index].progression ?: 0.0) - progression)
     } ?: matching.first()
 }
 
@@ -187,8 +212,16 @@ internal fun buildPublicationNarrationSegments(
     progression: Double?,
     highlight: String? = null,
     cssSelector: String? = null,
+    totalProgression: Double? = null,
 ): List<NarrationSegment> {
-    val firstBlock = findPublicationStartBlock(blocks, href, progression, highlight, cssSelector)
+    val firstBlock = findPublicationStartBlock(
+        blocks,
+        href,
+        progression,
+        highlight,
+        cssSelector,
+        totalProgression,
+    )
     return blocks.drop(firstBlock).flatMapIndexed { offset, block ->
         val text = if (offset == 0 && !highlight.isNullOrBlank()) {
             val highlightStart = block.text.indexOf(highlight)
