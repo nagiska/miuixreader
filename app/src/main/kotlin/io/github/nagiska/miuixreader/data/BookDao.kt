@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface BookDao {
-    @Query("SELECT * FROM books ORDER BY COALESCE(lastOpenedAt, 0) DESC, addedAt DESC")
+    @Query("SELECT * FROM books ORDER BY COALESCE(lastOpenedAt, 0) DESC, addedAt DESC, id DESC")
     fun observeAll(): Flow<List<BookEntity>>
 
     @Query("SELECT * FROM books WHERE id = :id LIMIT 1")
@@ -31,6 +31,9 @@ interface BookDao {
 
     @Query("UPDATE books SET coverPath = :coverPath WHERE id = :id")
     suspend fun updateCoverPath(id: Long, coverPath: String?): Int
+
+    @Query("UPDATE books SET lastOpenedAt = :lastOpenedAt WHERE id = :id")
+    suspend fun updateLastOpenedAt(id: Long, lastOpenedAt: Long): Int
 
     @Query("UPDATE books SET progression = :progression, lastOpenedAt = :lastOpenedAt WHERE id = :id")
     suspend fun updateProgression(id: Long, progression: String, lastOpenedAt: Long): Int

@@ -20,6 +20,7 @@ import androidx.core.content.ContextCompat
 import io.github.nagiska.miuixreader.R
 import io.github.nagiska.miuixreader.ReaderActivity
 import io.github.nagiska.miuixreader.ReaderApplication
+import io.github.nagiska.miuixreader.data.encodeTxtReadingProgress
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -31,13 +32,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /** Background playback coordinator for the Android TTS engine selected by the user. */
 class NarrationService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val progressWriteMutex = Mutex()
     private lateinit var audioManager: AudioManager
     private lateinit var mediaSession: MediaSession
     private lateinit var audioFocusRequest: AudioFocusRequest
@@ -367,14 +366,24 @@ class NarrationService : Service() {
     }
 
     private fun persistProgress(bookId: Long, anchor: NarrationAnchor) {
-        serviceScope.launch(Dispatchers.IO) {
-            progressWriteMutex.withLock {
+        val app = application as ReaderApplication
+        app.readingScope.launch {
+            app.readingProgressMutex.withLock {
                 val progression = when (anchor) {
                     is NarrationAnchor.Publication -> anchor.locatorJson
-                    is NarrationAnchor.Txt ->
-                        "txt2:${anchor.itemIndex}:${anchor.offsetFraction.coerceIn(0f, 1f)}"
+                    is NarrationAnchor.Txt -> encodeTxtReadingProgress(
+                        itemIndex = anchor.itemIndex,
+                        offsetFraction = anchor.offsetFraction,
+                        totalFraction = anchor.totalFraction,
+                    )
                 }
-                (application as ReaderApplication).books.saveProgression(bookId, progression)
+                try {
+                    app.books.saveProgression(bookId, progression)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    android.util.Log.w("NarrationService", "Could not save narration checkpoint", error)
+                }
             }
         }
     }

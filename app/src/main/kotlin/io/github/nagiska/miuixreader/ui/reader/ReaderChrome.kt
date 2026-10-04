@@ -2,6 +2,9 @@ package io.github.nagiska.miuixreader.ui.reader
 
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.fadeIn
@@ -45,6 +48,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -53,6 +57,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -232,6 +237,7 @@ fun ReaderChrome(
     onBackgroundScrimChange: (Float) -> Unit = {},
     autoHideEnabled: Boolean = true,
     onVisibilityChanged: (Boolean) -> Unit = {},
+    onBackGestureChanged: (Boolean) -> Unit = {},
     onSeekPage: (Int) -> Unit = {},
     onSeekFraction: (Float) -> Unit = {},
     tableOfContents: List<Link> = emptyList(),
@@ -251,17 +257,61 @@ fun ReaderChrome(
     onNarrationToggle: () -> Unit = {},
     onNarrationStop: () -> Unit = {},
 ) {
-    chrome.AutoHide(enabled = autoHideEnabled)
+    val topVisibility = remember { MutableTransitionState(false) }
+    val bottomVisibility = remember { MutableTransitionState(false) }
+    val notifyVisibility by rememberUpdatedState(onVisibilityChanged)
+    val notifyBackGesture by rememberUpdatedState(onBackGestureChanged)
+    var backGestureActive by remember { mutableStateOf(false) }
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    chrome.AutoHide(enabled = autoHideEnabled && !backGestureActive && !imeVisible)
     LaunchedEffect(chrome.visible) {
+        topVisibility.targetState = chrome.visible
+        bottomVisibility.targetState = chrome.visible
+    }
+    LaunchedEffect(
+        chrome.visible,
+        topVisibility.isIdle,
+        topVisibility.currentState,
+        bottomVisibility.isIdle,
+        bottomVisibility.currentState,
+    ) {
         if (chrome.visible) {
-            onVisibilityChanged(true)
-        } else {
-            delay(CHROME_EXIT_MILLIS)
-            if (!chrome.visible) onVisibilityChanged(false)
+            notifyVisibility(true)
+        } else if (
+            topVisibility.isIdle && !topVisibility.currentState &&
+            bottomVisibility.isIdle && !bottomVisibility.currentState
+        ) {
+            notifyVisibility(false)
         }
+    }
+    DisposableEffect(Unit) {
+        onDispose { notifyBackGesture(false) }
     }
     var sheetBackProgress by remember { mutableFloatStateOf(0f) }
     var chromeBackProgress by remember { mutableFloatStateOf(0f) }
+    var backPanel by remember { mutableStateOf(ReaderPanel.NONE) }
+    val animatedSheetProgress by animateFloatAsState(
+        targetValue = sheetBackProgress,
+        animationSpec = if (backGestureActive) tween(0) else folmeSpring(0.9f, 0.38f),
+        label = "sheetBackProgress",
+    )
+    val animatedChromeProgress by animateFloatAsState(
+        targetValue = chromeBackProgress,
+        animationSpec = if (backGestureActive) tween(0) else folmeSpring(0.9f, 0.38f),
+        label = "chromeBackProgress",
+    )
+    // A newly opened panel never inherits the previous panel's completed gesture.
+    LaunchedEffect(chrome.panel) {
+        if (chrome.panel != ReaderPanel.NONE && !backGestureActive) {
+            backPanel = ReaderPanel.NONE
+            sheetBackProgress = 0f
+        }
+    }
+    LaunchedEffect(chrome.visible) {
+        if (chrome.visible && !backGestureActive) chromeBackProgress = 0f
+    }
+    fun panelProgress(panel: ReaderPanel): Float =
+        if (backPanel == panel) animatedSheetProgress else 0f
     // The chrome floats over the reader background; pick a light or dark color
     // scheme for its text/controls based on that background blended with the
     // white glass layer, so a white reader background stays readable in a dark
@@ -289,38 +339,46 @@ fun ReaderChrome(
         if (blendedGlass.luminance() < 0.5f) darkColorScheme() else lightColorScheme()
     }
     // Predictive back: an open sheet follows the back gesture down, then closes.
-    PredictiveBackHandler(enabled = chrome.panel != ReaderPanel.NONE) { progress ->
+    PredictiveBackHandler(enabled = chrome.panel != ReaderPanel.NONE && !imeVisible) { progress ->
+        val startingPanel = chrome.panel
+        backPanel = startingPanel
+        sheetBackProgress = 0f
+        backGestureActive = true
+        notifyBackGesture(true)
         try {
-            progress.collect { event -> sheetBackProgress = event.progress }
+            progress.collect { event -> sheetBackProgress = event.progress.coerceIn(0f, 1f) }
             sheetBackProgress = 1f
-            chrome.closePanel()
+            if (chrome.panel == startingPanel) chrome.closePanel()
         } catch (_: CancellationException) {
             sheetBackProgress = 0f
         } finally {
-            delay(CHROME_EXIT_MILLIS)
-            sheetBackProgress = 0f
+            backGestureActive = false
+            notifyBackGesture(false)
         }
     }
     // Predictive back: visible chrome bars follow the gesture (top bar slides
     // up, bottom bar slides down), then hide.
     PredictiveBackHandler(
-        enabled = autoHideEnabled && chrome.visible && chrome.panel == ReaderPanel.NONE,
+        enabled = autoHideEnabled && chrome.visible && chrome.panel == ReaderPanel.NONE && !imeVisible,
     ) { progress ->
+        chromeBackProgress = 0f
+        backGestureActive = true
+        notifyBackGesture(true)
         try {
-            progress.collect { event -> chromeBackProgress = event.progress }
+            progress.collect { event -> chromeBackProgress = event.progress.coerceIn(0f, 1f) }
             chromeBackProgress = 1f
-            chrome.hide()
+            if (chrome.panel == ReaderPanel.NONE) chrome.hide()
         } catch (_: CancellationException) {
             chromeBackProgress = 0f
         } finally {
-            delay(CHROME_EXIT_MILLIS)
-            chromeBackProgress = 0f
+            backGestureActive = false
+            notifyBackGesture(false)
         }
     }
     var topBarBottom by remember { mutableStateOf(0f) }
     var bottomBarTop by remember { mutableStateOf(Float.MAX_VALUE) }
     val dismissModifier = if (
-        autoHideEnabled && chrome.visible && chrome.panel == ReaderPanel.NONE
+        autoHideEnabled && chrome.visible && chrome.panel == ReaderPanel.NONE && !backGestureActive
     ) {
         Modifier.pointerInput(Unit) {
             awaitEachGesture {
@@ -374,7 +432,7 @@ fun ReaderChrome(
                     .then(dismissModifier),
             ) {
             ReaderTopBar(
-                visible = chrome.visible,
+                visibility = topVisibility,
                 title = title,
                 preferences = preferences,
                 supportsTypography = supportsTypography,
@@ -389,13 +447,13 @@ fun ReaderChrome(
                 onNarration = { chrome.open(ReaderPanel.NARRATION) },
                 narrationAvailable = narrationAvailable,
                 colors = chromeColors,
-                backProgress = chromeBackProgress,
+                backProgress = animatedChromeProgress,
                 modifier = Modifier.onGloballyPositioned {
                     topBarBottom = it.positionInWindow().y + it.size.height.toFloat()
                 },
             )
             ReaderBottomBar(
-                visible = chrome.visible,
+                visibility = bottomVisibility,
                 label = progress.value,
                 backdrop = backdrop,
                 liquidGlassEnabled = preferences.liquidGlassEnabled,
@@ -407,7 +465,7 @@ fun ReaderChrome(
                 narrationPhase = narrationState.phase,
                 onNarrationToggle = onNarrationToggle,
                 colors = chromeColors,
-                backProgress = chromeBackProgress,
+                backProgress = animatedChromeProgress,
                 modifier = Modifier.onGloballyPositioned {
                     bottomBarTop = it.positionInWindow().y
                 },
@@ -419,7 +477,7 @@ fun ReaderChrome(
             backdrop = backdrop,
             onDismiss = chrome::closePanel,
             colors = chromeColors,
-            backProgress = sheetBackProgress,
+            backProgress = panelProgress(ReaderPanel.TYPOGRAPHY),
             onFontFamilyChange = onFontFamilyChange,
             onFontScaleChange = onFontScaleChange,
             onFontWeightChange = onFontWeightChange,
@@ -433,7 +491,7 @@ fun ReaderChrome(
             colors = chromeColors,
             readerBackground = readerBackground,
             onDismiss = chrome::closePanel,
-            backProgress = sheetBackProgress,
+            backProgress = panelProgress(ReaderPanel.BACKGROUND),
             onFollowTheme = onBackgroundFollowTheme,
             onColorChange = onBackgroundColorChange,
             onUseImage = onBackgroundImage,
@@ -448,7 +506,7 @@ fun ReaderChrome(
             backdrop = backdrop,
             colors = chromeColors,
             onDismiss = chrome::closePanel,
-            backProgress = sheetBackProgress,
+            backProgress = panelProgress(ReaderPanel.NARRATION),
             onToggle = onNarrationToggle,
             onStop = onNarrationStop,
         )
@@ -463,7 +521,7 @@ fun ReaderChrome(
             colors = chromeColors,
             onSeekPage = onSeekPage,
             onSeekFraction = onSeekFraction,
-            backProgress = sheetBackProgress,
+            backProgress = panelProgress(ReaderPanel.PROGRESS),
         )
         ReaderTocSheet(
             show = chrome.panel == ReaderPanel.TABLE_OF_CONTENTS,
@@ -473,7 +531,7 @@ fun ReaderChrome(
             onDismiss = chrome::closePanel,
             colors = chromeColors,
             onTocClick = onTocClick,
-            backProgress = sheetBackProgress,
+            backProgress = panelProgress(ReaderPanel.TABLE_OF_CONTENTS),
         )
         ReaderSearchSheet(
             show = chrome.panel == ReaderPanel.SEARCH,
@@ -485,7 +543,7 @@ fun ReaderChrome(
             colors = chromeColors,
             onQueryChange = onSearchQuery,
             onResultClick = onSearchResultClick,
-            backProgress = sheetBackProgress,
+            backProgress = panelProgress(ReaderPanel.SEARCH),
         )
             ReaderBookmarkSheet(
                 show = chrome.panel == ReaderPanel.BOOKMARKS,
@@ -496,7 +554,7 @@ fun ReaderChrome(
                 colors = chromeColors,
                 onBookmarkClick = onBookmarkClick,
                 onBookmarkDelete = onBookmarkDelete,
-                backProgress = sheetBackProgress,
+                backProgress = panelProgress(ReaderPanel.BOOKMARKS),
             )
         }
     }
@@ -504,7 +562,7 @@ fun ReaderChrome(
 
 @Composable
 private fun ReaderTopBar(
-    visible: Boolean,
+    visibility: MutableTransitionState<Boolean>,
     title: String,
     preferences: ReaderPreferences,
     supportsTypography: Boolean,
@@ -525,7 +583,7 @@ private fun ReaderTopBar(
     val glassColor = readerGlassColor()
     val typographyDescription = stringResourceCompat(R.string.typography)
     AnimatedVisibility(
-        visible = visible,
+        visibleState = visibility,
         modifier = Modifier.fillMaxWidth(),
         enter = readerEnter { -it } + fadeIn(animationSpec = folmeSpring(0.9f, 0.38f)),
         exit = readerExit { -it } + fadeOut(animationSpec = folmeSpring(0.9f, 0.38f)),
@@ -642,7 +700,7 @@ private fun ReaderTopBar(
 
 @Composable
 private fun ReaderBottomBar(
-    visible: Boolean,
+    visibility: MutableTransitionState<Boolean>,
     label: String,
     backdrop: Backdrop,
     liquidGlassEnabled: Boolean,
@@ -659,7 +717,7 @@ private fun ReaderBottomBar(
 ) {
     val glassColor = readerGlassColor()
     AnimatedVisibility(
-        visible = visible,
+        visibleState = visibility,
         modifier = Modifier.fillMaxSize(),
         enter = readerEnter { it } + fadeIn(animationSpec = folmeSpring(0.9f, 0.38f)),
         exit = readerExit { it } + fadeOut(animationSpec = folmeSpring(0.9f, 0.38f)),
@@ -1572,8 +1630,6 @@ private fun readerGlassColor(): Color {
     val baseAlpha = if (MiuixTheme.colorScheme.background.luminance() < 0.5f) 0.08f else 0.18f
     return Color.White.copy(alpha = baseAlpha * LocalLiquidGlassOpacity.current)
 }
-
-private const val CHROME_EXIT_MILLIS = 450L
 
 /** A search hit: a publication [locator] (EPUB) or a TXT [itemIndex]/[scrollOffset]. */
 data class ReaderSearchResult(

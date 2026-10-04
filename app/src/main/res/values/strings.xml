@@ -4,6 +4,10 @@
     <string name="bookshelf_title">Bookshelf</string>
     <string name="bookshelf_empty">Your library is empty.</string>
     <string name="bookshelf_empty_short">No books yet</string>
+    <string name="book_recently_read">Recently read</string>
+    <string name="book_progress_percent">%1$d%% read</string>
+    <string name="book_progress_not_started">Not started</string>
+    <string name="book_progress_unknown">Progress unavailable</string>
     <plurals name="books_count">
         <item quantity="one">%1$d book</item>
         <item quantity="other">%1$d books</item>

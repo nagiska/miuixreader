@@ -4,6 +4,10 @@
     <string name="bookshelf_title">书架</string>
     <string name="bookshelf_empty">书架还是空的。</string>
     <string name="bookshelf_empty_short">暂无书籍</string>
+    <string name="book_recently_read">最近阅读</string>
+    <string name="book_progress_percent">已读 %1$d%%</string>
+    <string name="book_progress_not_started">尚未开始</string>
+    <string name="book_progress_unknown">暂无阅读进度</string>
     <plurals name="books_count">
         <item quantity="other">%1$d 本书</item>
     </plurals>

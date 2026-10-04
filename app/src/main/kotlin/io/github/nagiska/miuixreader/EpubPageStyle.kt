@@ -11,12 +11,13 @@ internal fun buildEpubPageStyleScript(
     preferences: ReaderPreferences,
     imageDataUri: String?,
     fallbackDark: Boolean,
+    generation: Long = 0L,
 ): String {
     val styleId = "miuix-reader-page-style"
     if (preferences.readerBackgroundMode == ReaderBackgroundMode.FOLLOW_THEME) {
         val fallback = if (fallbackDark) 0xFF000000.toInt() else 0xFFFFFFFF.toInt()
-        val css = "html,body{background-color:${fallback.toCssColor()}!important;}"
-        return "(function(){var s=document.getElementById('$styleId');" +
+        val css = "html,body{background-color:${fallback.toCssColor()}!important;background-image:none!important;}"
+        return "(function(){${styleGenerationGuard(generation)}var s=document.getElementById('$styleId');" +
             "if(!s){s=document.createElement('style');s.id='$styleId';document.head.appendChild(s);}" +
             "s.textContent=${css.toJavaScriptString()};})();"
     }
@@ -38,10 +39,11 @@ internal fun buildEpubPageStyleScript(
         val alpha = preferences.readerBackgroundScrim.coerceIn(MIN_IMAGE_SCRIM, MAX_IMAGE_SCRIM)
         // The scrim rides in a gradient layer above the photo (a plain
         // background-color sits under the image and never shows).
-        "background-image:linear-gradient(rgba(0,0,0,$alpha),rgba(0,0,0,$alpha))," +            "url('$imageDataUri')!important;background-size:cover!important;" +
+        "background-image:linear-gradient(rgba(0,0,0,$alpha),rgba(0,0,0,$alpha))," +
+            "url('$imageDataUri')!important;background-size:cover!important;" +
             "background-position:center!important;"
     } else {
-        ""
+        "background-image:none!important;"
     }
     val css = buildString {
         append("html{background-color:")
@@ -55,10 +57,14 @@ internal fun buildEpubPageStyleScript(
         append(text.toCssColor())
         append("!important;}")
     }
-    return "(function(){var s=document.getElementById('$styleId');" +
+    return "(function(){${styleGenerationGuard(generation)}var s=document.getElementById('$styleId');" +
         "if(!s){s=document.createElement('style');s.id='$styleId';document.head.appendChild(s);}" +
         "s.textContent=${css.toJavaScriptString()};})();"
 }
+
+private fun styleGenerationGuard(generation: Long): String =
+    "if((window.__miuixReaderStyleGeneration||0)>$generation)return;" +
+        "window.__miuixReaderStyleGeneration=$generation;"
 
 private fun Int.toCssColor(): String = String.format(Locale.ROOT, "#%06X", this and 0xFFFFFF)
 

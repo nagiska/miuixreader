@@ -80,6 +80,7 @@ import io.github.nagiska.miuixreader.data.MIN_LIQUID_GLASS_OPACITY
 import io.github.nagiska.miuixreader.data.ReaderBackgroundMode
 import io.github.nagiska.miuixreader.data.ReaderPreferences
 import io.github.nagiska.miuixreader.data.bookFormat
+import io.github.nagiska.miuixreader.data.overallReadingProgress
 import io.github.nagiska.miuixreader.ui.theme.ReaderTheme
 import java.util.Locale
 import kotlinx.coroutines.delay
@@ -88,12 +89,14 @@ import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.LinearProgressIndicator
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.SmallTitle
 import top.yukonga.miuix.kmp.basic.TabRowWithContour
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.basic.TextFieldDefaults
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Add
@@ -107,6 +110,7 @@ import top.yukonga.miuix.kmp.icon.extended.Search
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.preference.SliderPreference
 import top.yukonga.miuix.kmp.preference.SwitchPreference
+import top.yukonga.miuix.kmp.theme.LocalContentColor
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
 
@@ -269,6 +273,16 @@ private fun BookshelfScreen(
     onSettings: () -> Unit,
 ) {
     val hasBackgroundImage = state.preferences.bookshelfBackgroundPath != null
+    val featuredBook = if (state.query.trim().isEmpty()) {
+        state.books.firstOrNull { it.lastOpenedAt != null }
+    } else {
+        null
+    }
+    val regularBooks = if (featuredBook == null) {
+        state.books
+    } else {
+        state.books.filterNot { it.id == featuredBook.id }
+    }
     val listState = rememberLazyListState()
     val titleCollapsed by remember {
         derivedStateOf {
@@ -323,6 +337,7 @@ private fun BookshelfScreen(
                                     onQueryChange("")
                                     onSearchVisibleChange(false)
                                 },
+                                contentColor = headerColor,
                                 modifier = Modifier.weight(1f).padding(start = 12.dp),
                             )
                             Spacer(Modifier.width(8.dp))
@@ -394,7 +409,20 @@ private fun BookshelfScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    items(state.books, key = { it.id }) { book ->
+                    featuredBook?.let { book ->
+                        item(key = book.id) {
+                            BookRow(
+                                book = book,
+                                featured = true,
+                                liquidGlassEnabled = liquidGlassEnabled,
+                                backdrop = backdrop,
+                                onClick = { onOpen(book) },
+                                onDelete = { onDelete(book) },
+                                onEdit = { onEdit(book) },
+                            )
+                        }
+                    }
+                    items(regularBooks, key = { it.id }) { book ->
                         BookRow(
                             book = book,
                             liquidGlassEnabled = liquidGlassEnabled,
@@ -453,6 +481,7 @@ private fun EmptyShelf(
 @Composable
 private fun BookRow(
     book: BookEntity,
+    featured: Boolean = false,
     liquidGlassEnabled: Boolean,
     backdrop: Backdrop,
     onClick: () -> Unit,
@@ -464,7 +493,7 @@ private fun BookRow(
             backdrop = backdrop,
             onClick = onClick,
         ) {
-            BookRowContent(book = book, onDelete = onDelete, onEdit = onEdit)
+            BookRowContent(book = book, featured = featured, onDelete = onDelete, onEdit = onEdit)
         }
     } else {
         Card(
@@ -474,7 +503,7 @@ private fun BookRow(
             showIndication = true,
             onClick = onClick,
         ) {
-            BookRowContent(book = book, onDelete = onDelete, onEdit = onEdit)
+            BookRowContent(book = book, featured = featured, onDelete = onDelete, onEdit = onEdit)
         }
     }
 }
@@ -680,69 +709,130 @@ private fun BookshelfGlassSheet(
 @Composable
 private fun BookRowContent(
     book: BookEntity,
+    featured: Boolean,
     onDelete: () -> Unit,
     onEdit: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(14.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (book.coverPath != null) {
-            AsyncImage(
-                model = book.coverPath,
-                contentDescription = null,
-                modifier = Modifier.size(width = 58.dp, height = 82.dp).clip(RoundedCornerShape(8.dp)),
-                contentScale = ContentScale.Crop,
+    val progress = remember(book.lastOpenedAt, book.progression, book.format) {
+        book.overallReadingProgress()
+    }
+    Column(modifier = Modifier.fillMaxWidth().padding(if (featured) 18.dp else 14.dp)) {
+        if (featured) {
+            Text(
+                text = stringResourceCompat(R.string.book_recently_read),
+                color = MiuixTheme.colorScheme.primary,
+                style = MiuixTheme.textStyles.body2.copy(fontWeight = FontWeight.Medium),
+                modifier = Modifier.padding(bottom = 12.dp),
             )
-        } else {
-            Box(
-                modifier = Modifier
-                    .size(width = 58.dp, height = 82.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MiuixTheme.colorScheme.surfaceContainerHigh),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            BookCover(book = book, featured = featured)
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(
+                    text = book.title,
+                    maxLines = if (featured) 3 else 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = if (featured) {
+                        MiuixTheme.textStyles.body1.copy(fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        MiuixTheme.textStyles.body1.copy(fontWeight = FontWeight.Medium)
+                    },
+                )
+                if (book.author.isNotBlank()) {
+                    Text(book.author, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MiuixTheme.textStyles.body2)
+                }
+                Text(
+                    text = "${book.bookFormat.label} · ${formatBytes(book.sizeBytes)}",
+                    style = MiuixTheme.textStyles.body2,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (!featured) {
+                    BookReadingProgress(progress = progress, neverOpened = book.lastOpenedAt == null)
+                }
+            }
+            Column {
+                IconButton(onClick = onEdit) {
                     Icon(
-                        imageVector = when (book.bookFormat) {
-                            BookFormat.CBZ -> MiuixIcons.Image
-                            else -> MiuixIcons.File
-                        },
-                        contentDescription = null,
-                        tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        MiuixIcons.Edit,
+                        contentDescription = stringResourceCompat(R.string.edit_book_info),
                     )
-                    Text(
-                        text = book.bookFormat.label,
-                        style = MiuixTheme.textStyles.body2,
-                        modifier = Modifier.padding(top = 4.dp),
-                    )
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(MiuixIcons.Delete, contentDescription = stringResourceCompat(R.string.delete))
                 }
             }
         }
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text(
-                text = book.title,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                style = MiuixTheme.textStyles.body1.copy(fontWeight = FontWeight.Medium),
-            )
-            if (book.author.isNotBlank()) {
-                Text(book.author, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MiuixTheme.textStyles.body2)
+        if (featured) {
+            Spacer(Modifier.height(14.dp))
+            BookReadingProgress(progress = progress, neverOpened = false)
+        }
+    }
+}
+
+@Composable
+private fun BookCover(book: BookEntity, featured: Boolean) {
+    val coverModifier = Modifier
+        .size(width = if (featured) 82.dp else 58.dp, height = if (featured) 116.dp else 82.dp)
+        .clip(RoundedCornerShape(8.dp))
+    if (book.coverPath != null) {
+        AsyncImage(
+            model = book.coverPath,
+            contentDescription = null,
+            modifier = coverModifier,
+            contentScale = ContentScale.Crop,
+        )
+    } else {
+        Box(
+            modifier = coverModifier.background(MiuixTheme.colorScheme.surfaceContainerHigh),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = when (book.bookFormat) {
+                        BookFormat.CBZ -> MiuixIcons.Image
+                        else -> MiuixIcons.File
+                    },
+                    contentDescription = null,
+                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+                Text(
+                    text = book.bookFormat.label,
+                    style = MiuixTheme.textStyles.body2,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
             }
-            Text(
-                text = "${book.bookFormat.label} · ${formatBytes(book.sizeBytes)}",
-                style = MiuixTheme.textStyles.body2,
-            )
         }
-        IconButton(onClick = onEdit) {
-            Icon(
-                MiuixIcons.Edit,
-                contentDescription = stringResourceCompat(R.string.edit_book_info),
+    }
+}
+
+@Composable
+private fun BookReadingProgress(progress: Float?, neverOpened: Boolean) {
+    val label = when {
+        neverOpened -> stringResourceCompat(R.string.book_progress_not_started)
+        progress == null -> stringResourceCompat(R.string.book_progress_unknown)
+        else -> stringResourceCompat(R.string.book_progress_percent, (progress * 100).toInt())
+    }
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = label,
+            style = MiuixTheme.textStyles.body2,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
+        if (progress == null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.15f)),
             )
-        }
-        IconButton(onClick = onDelete) {
-            Icon(MiuixIcons.Delete, contentDescription = stringResourceCompat(R.string.delete))
+        } else {
+            LinearProgressIndicator(progress = progress, modifier = Modifier.fillMaxWidth(), height = 6.dp)
         }
     }
 }
@@ -752,6 +842,7 @@ private fun SearchField(
     query: String,
     onQueryChange: (String) -> Unit,
     onClose: () -> Unit,
+    contentColor: Color,
     modifier: Modifier = Modifier,
 ) {
     val focusRequester = remember { FocusRequester() }
@@ -767,32 +858,40 @@ private fun SearchField(
             focusManager.clearFocus(force = true)
         }
     }
-    TextField(
-        value = query,
-        onValueChange = onQueryChange,
-        modifier = modifier.focusRequester(focusRequester),
-        label = stringResourceCompat(R.string.search_hint),
-        useLabelAsPlaceholder = true,
-        singleLine = true,
-        leadingIcon = {
-            Icon(
-                MiuixIcons.Search,
-                contentDescription = null,
-                modifier = Modifier.padding(start = 8.dp),
-            )
-        },
-        trailingIcon = {
-            IconButton(
-                onClick = {
-                    keyboardController?.hide()
-                    focusManager.clearFocus(force = true)
-                    onClose()
-                },
-            ) {
-                Icon(MiuixIcons.Close, contentDescription = stringResourceCompat(R.string.close))
-            }
-        },
-    )
+    CompositionLocalProvider(LocalContentColor provides contentColor) {
+        TextField(
+            value = query,
+            onValueChange = onQueryChange,
+            modifier = modifier.focusRequester(focusRequester),
+            colors = TextFieldDefaults.textFieldColors(
+                backgroundColor = Color.Transparent,
+                labelColor = contentColor,
+                borderColor = Color.Transparent,
+            ),
+            cornerRadius = CardDefaults.CornerRadius,
+            label = stringResourceCompat(R.string.search_hint),
+            useLabelAsPlaceholder = true,
+            singleLine = true,
+            leadingIcon = {
+                Icon(
+                    MiuixIcons.Search,
+                    contentDescription = null,
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            },
+            trailingIcon = {
+                IconButton(
+                    onClick = {
+                        keyboardController?.hide()
+                        focusManager.clearFocus(force = true)
+                        onClose()
+                    },
+                ) {
+                    Icon(MiuixIcons.Close, contentDescription = stringResourceCompat(R.string.close))
+                }
+            },
+        )
+    }
 }
 
 @Composable

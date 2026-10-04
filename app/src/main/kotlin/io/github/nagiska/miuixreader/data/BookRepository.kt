@@ -116,13 +116,9 @@ class BookRepository(
         book.coverPath?.let(::File)?.delete()
     }
 
-    suspend fun markOpened(book: BookEntity, progression: String?) {
-        dao.update(
-            book.copy(
-                lastOpenedAt = System.currentTimeMillis(),
-                progression = progression ?: book.progression,
-            )
-        )
+    /** Opening changes recency only; progress is persisted separately through [saveProgression]. */
+    suspend fun markOpened(book: BookEntity, @Suppress("UNUSED_PARAMETER") progression: String?) {
+        dao.updateLastOpenedAt(book.id, System.currentTimeMillis())
     }
 
     suspend fun saveProgression(bookId: Long, progression: String) {

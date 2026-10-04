@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.ImageDecoder
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -43,6 +44,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
@@ -61,6 +63,7 @@ import androidx.fragment.app.FragmentActivity
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.doOnPreDraw
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -81,6 +84,8 @@ import io.github.nagiska.miuixreader.data.ReaderPreferences
 import io.github.nagiska.miuixreader.data.bookFormat
 import io.github.nagiska.miuixreader.data.contrastTextColor
 import io.github.nagiska.miuixreader.data.decodeText
+import io.github.nagiska.miuixreader.data.decodeTxtReadingProgress
+import io.github.nagiska.miuixreader.data.encodeTxtReadingProgress
 import io.github.nagiska.miuixreader.ui.reader.ReaderBackdrop
 import io.github.nagiska.miuixreader.ui.reader.ReaderChrome
 import io.github.nagiska.miuixreader.ui.reader.ReaderChromeState
@@ -108,7 +113,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -159,6 +166,9 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import kotlin.math.roundToInt
+import kotlin.coroutines.resume
+
+private data class BackgroundDataUri(val signature: String, val uri: String)
 
 @OptIn(ExperimentalReadiumApi::class)
 class ReaderActivity : FragmentActivity() {
@@ -175,11 +185,22 @@ class ReaderActivity : FragmentActivity() {
     private var latestPreferences = ReaderPreferences()
     private var initialPreferences = ReaderPreferences()
     private var capturePending = false
-    private var captureIndex = 0
-    private var captureBitmaps: Array<Bitmap?> = arrayOf(null, null)
+    private var backdropGeneration = 0L
+    private var backdropDirty = true
+    private var backdropCaptureJob: Job? = null
+    private var wallpaperJob: Job? = null
+    private var backdropBackgroundKey: String? = null
+    private var pageStyleGeneration = 0L
+    private val pageStyleMutex = Mutex()
+    private var chromeDrawn = false
+    private var backGestureInProgress = false
+    private var navigationBarsVisible: Boolean? = null
+    private var readerContentReady = false
+    private var textCheckpoint: (() -> Unit)? = null
+    private var lastStableProgression: String? = null
+    private var checkpointFrozen = false
     private var lastBackdropRefreshAt = 0L
-    private var cachedBackgroundSignature: String? = null
-    private var cachedBackgroundDataUri: String? = null
+    private var cachedBackgroundImage: BackgroundDataUri? = null
     private var narrationState by mutableStateOf(NarrationPlaybackState())
     private var narrationBuildJob: Job? = null
     private var pendingNarrationStart: (() -> Unit)? = null
@@ -188,7 +209,6 @@ class ReaderActivity : FragmentActivity() {
     private var typographyRestoreJob: Job? = null
     private var typographyGeneration = 0L
     private var suppressProgression = false
-    private val progressionWriteMutex = Mutex()
 
     private val readerSettings get() = (application as ReaderApplication).settings
     private val touchExplorationEnabled: Boolean
@@ -222,12 +242,15 @@ class ReaderActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(null)
         enableEdgeToEdge()
+        window.isNavigationBarContrastEnforced = false
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
         hideStatusBar()
         lifecycleScope.launch {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 readerSettings.preferences.collectLatest { preferences ->
-                    updateSystemBars(preferences)
                     latestPreferences = preferences
+                    updateSystemBars(preferences)
+                    updatePublicationBackground(preferences)
                 }
             }
         }
@@ -249,6 +272,7 @@ class ReaderActivity : FragmentActivity() {
                 null
             }
             currentBookId = book?.id ?: -1L
+            lastStableProgression = book?.progression
             applyNarrationState(NarrationService.currentState.value)
             if (book == null || !File(book.path).isFile) {
                 showError(getString(R.string.reader_book_missing))
@@ -477,21 +501,30 @@ class ReaderActivity : FragmentActivity() {
         }
     }
 
-    private fun saveProgressionIfAllowed(bookId: Long, progression: String) {
-        if (suppressProgression) return
+    private fun saveProgressionIfAllowed(bookId: Long, progression: String, finalCheckpoint: Boolean = false) {
+        if (bookId < 0 || checkpointFrozen || (suppressProgression && !finalCheckpoint)) return
         val typographyGenerationAtRequest = typographyGeneration
         val narrationAtRequest = NarrationService.currentState.value
         if (narrationAtRequest.bookId == bookId && narrationAtRequest.isActive) return
-        lifecycleScope.launch {
-            progressionWriteMutex.withLock {
+        lastStableProgression = progression
+        val app = application as ReaderApplication
+        app.readingScope.launch {
+            app.readingProgressMutex.withLock {
                 if (
                     typographyGenerationAtRequest == typographyGeneration &&
-                    !suppressProgression &&
+                    (!suppressProgression || finalCheckpoint) &&
+                    lastStableProgression == progression &&
                     NarrationService.currentState.value.let { narration ->
                         narration.bookId != bookId || !narration.isActive
                     }
                 ) {
-                    (application as ReaderApplication).books.saveProgression(bookId, progression)
+                    try {
+                        app.books.saveProgression(bookId, progression)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        android.util.Log.w("ReaderActivity", "Could not save reading checkpoint", error)
+                    }
                 }
             }
         }
@@ -532,18 +565,20 @@ class ReaderActivity : FragmentActivity() {
         val imageListener = object : ImageNavigatorFragment.Listener {}
         val epubPaginationListener = object : EpubNavigatorFragment.PaginationListener {
             override fun onPageChanged(pageIndex: Int, totalPages: Int, locator: Locator) {
-                refreshPublicationBackdrop()
                 // Skip the style re-injection while dragging the progress
                 // slider — it re-renders the WebView and makes the sheet flicker.
                 lifecycleScope.launch {
-                    if (!seekingProgression) applyEpubPageStyle(latestPreferences)
+                    if (!seekingProgression) {
+                        applyEpubPageStyle(latestPreferences)
+                        refreshPublicationBackdrop()
+                    }
                 }
             }
 
             override fun onPageLoaded() {
                 lifecycleScope.launch {
-                    delay(80)
                     applyEpubPageStyle(latestPreferences)
+                    refreshPublicationBackdrop()
                 }
             }
         }
@@ -618,6 +653,9 @@ class ReaderActivity : FragmentActivity() {
                 .commitNow()
             navigator = supportFragmentManager.findFragmentByTag(NAVIGATOR_TAG) as? Navigator
             epubNavigator = navigator as? EpubNavigatorFragment
+            readerContentReady = true
+            updateSystemBars(latestPreferences)
+            updatePublicationBackground(latestPreferences)
             installPublicationInput()
             observeProgression(book)
             observeBookmarks(book.id)
@@ -732,11 +770,13 @@ class ReaderActivity : FragmentActivity() {
                             stopNarrationIfActive()
                         },
                         onVisibilityChanged = { visible ->
+                            onReaderChromeVisibilityChanged(visible)
                             if (!visible && !chromeState.visible) {
                                 composeView.visibility = View.GONE
-                                publicationBackdrop.clear()
+                                refreshPublicationBackdrop()
                             }
                         },
+                        onBackGestureChanged = ::onReaderBackGestureChanged,
                     )
                 }
             }
@@ -772,43 +812,110 @@ class ReaderActivity : FragmentActivity() {
             chromeState.hide()
             return
         }
-        if (capturePending) return
-        fun reveal() {
-            capturePending = false
-            view.visibility = View.VISIBLE
-            view.bringToFront()
-            chromeState.show()
-        }
-        if (!latestPreferences.liquidGlassEnabled) {
-            reveal()
-            return
-        }
-        capturePublicationBackdrop(onComplete = { reveal() })
+        // Never delay input or hide chrome for an asynchronous window capture.
+        backdropCaptureJob?.cancel()
+        backdropGeneration++
+        backdropDirty = true
+        view.visibility = View.VISIBLE
+        view.bringToFront()
+        chromeState.show()
+        onReaderChromeVisibilityChanged(true)
     }
 
-    /**
-     * Refreshes the glass snapshot after the page content changes while the
-     * chrome is visible. The chrome overlay is hidden for one frame so the
-     * captured window does not include the bars or sheets themselves.
-     */
-    private fun refreshPublicationBackdrop() {
+    /** Invalidates old page pixels; capture is allowed only after chrome fully exits. */
+    private fun refreshPublicationBackdrop(clearSnapshot: Boolean = true) {
+        backdropGeneration++
+        backdropDirty = true
+        if (clearSnapshot) publicationBackdrop.clear()
+        scheduleBackdropCapture()
+    }
+
+    private fun scheduleBackdropCapture() {
+        backdropCaptureJob?.cancel()
         if (
-            seekingProgression ||
-            !chromeState.visible ||
-            capturePending ||
-            isDestroyed ||
-            !latestPreferences.liquidGlassEnabled
-        ) {
-            return
+            !backdropDirty || capturePending || seekingProgression || backGestureInProgress ||
+            chromeState.visible || chromeDrawn || chromeView?.visibility != View.GONE ||
+            isDestroyed || !readerContentReady || !latestPreferences.liquidGlassEnabled
+        ) return
+        val generation = backdropGeneration
+        backdropCaptureJob = lifecycleScope.launch {
+            val remaining = BACKDROP_REFRESH_MIN_INTERVAL_MILLIS -
+                (SystemClock.uptimeMillis() - lastBackdropRefreshAt)
+            if (remaining > 0L) delay(remaining)
+            if (!awaitWindowFrame()) return@launch
+            if (generation != backdropGeneration || chromeDrawn || chromeState.visible) return@launch
+            capturePublicationBackdrop(generation)
         }
-        val now = SystemClock.uptimeMillis()
-        if (now - lastBackdropRefreshAt < BACKDROP_REFRESH_MIN_INTERVAL_MILLIS) return
-        lastBackdropRefreshAt = now
-        val chrome = chromeView ?: return
-        chrome.alpha = 0f
-        lifecycleScope.launch {
-            delay(BACKDROP_REFRESH_CAPTURE_DELAY_MILLIS)
-            capturePublicationBackdrop(onComplete = { chrome.alpha = 1f })
+    }
+
+    private suspend fun awaitWindowFrame(): Boolean = withTimeoutOrNull(750L) {
+        suspendCancellableCoroutine<Unit> { continuation ->
+            val decor = window.decorView
+            val observer = decor.viewTreeObserver
+            val committed = Runnable { if (continuation.isActive) continuation.resume(Unit) }
+            val listener = decor.doOnPreDraw {
+                if (continuation.isActive) {
+                    if (decor.isHardwareAccelerated) {
+                        decor.viewTreeObserver.registerFrameCommitCallback(committed)
+                    } else {
+                        decor.post(committed)
+                    }
+                }
+            }
+            continuation.invokeOnCancellation {
+                listener.removeListener()
+                if (observer.isAlive) observer.unregisterFrameCommitCallback(committed)
+                decor.removeCallbacks(committed)
+            }
+            decor.invalidate()
+        }
+    } != null
+
+    private fun updatePublicationBackground(preferences: ReaderPreferences) {
+        if (publicationReader == null) return
+        val customBackground = publicationReader == PublicationReader.EPUB &&
+            publication?.metadata?.layout != Layout.FIXED
+        val mode = if (customBackground) preferences.readerBackgroundMode else ReaderBackgroundMode.COLOR
+        val color = when {
+            !customBackground -> Color.Black
+            mode == ReaderBackgroundMode.COLOR -> Color(preferences.readerBackgroundColor)
+            mode == ReaderBackgroundMode.IMAGE -> Color.Black
+            isDark(preferences.themeMode) -> Color.Black
+            else -> Color.White
+        }
+        val file = preferences.readerBackgroundPath?.takeIf { mode == ReaderBackgroundMode.IMAGE }?.let(::File)
+        val width = window.decorView.width.coerceAtLeast(1)
+        val height = window.decorView.height.coerceAtLeast(1)
+        val key = "$mode:$color:${file?.absolutePath}:${file?.length()}:${file?.lastModified()}:" +
+            "${preferences.readerBackgroundScrim}:${preferences.liquidGlassEnabled}:$width:$height"
+        if (key == backdropBackgroundKey) return
+        backdropBackgroundKey = key
+        wallpaperJob?.cancel()
+        publicationBackdrop.setBackground(color, width = width, height = height)
+        refreshPublicationBackdrop()
+        if (mode != ReaderBackgroundMode.IMAGE) {
+            cachedBackgroundImage = null
+        }
+        if (file == null || !preferences.liquidGlassEnabled) return
+        wallpaperJob = lifecycleScope.launch {
+            val bitmap = withContext(Dispatchers.IO) {
+                runCatching {
+                    ImageDecoder.decodeBitmap(ImageDecoder.createSource(file)) { decoder, info, _ ->
+                        val scale = minOf(1f, MAX_CAPTURE_DIMENSION / maxOf(info.size.width, info.size.height).toFloat())
+                        decoder.setTargetSize(
+                            (info.size.width * scale).toInt().coerceAtLeast(1),
+                            (info.size.height * scale).toInt().coerceAtLeast(1),
+                        )
+                        decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                    }
+                }.getOrNull()
+            } ?: return@launch
+            if (key != backdropBackgroundKey || isDestroyed) {
+                bitmap.recycle()
+                return@launch
+            }
+            publicationBackdrop.setBackground(color, bitmap, preferences.readerBackgroundScrim, width, height)
+            refreshPublicationBackdrop()
         }
     }
 
@@ -947,67 +1054,52 @@ class ReaderActivity : FragmentActivity() {
                     // restart so it is not dropped.
                     seekToPage(latestSeekPage)
                 } else {
-                    refreshPublicationBackdrop()
                     // Restore the style injection that was skipped while
                     // dragging (onPageChanged may not fire again for the
                     // current resource).
                     applyEpubPageStyle(latestPreferences)
+                    refreshPublicationBackdrop()
                 }
             }
         }
     }
 
-    private fun capturePublicationBackdrop(onComplete: (() -> Unit)? = null) {
-        if (capturePending || isDestroyed || !latestPreferences.liquidGlassEnabled) {
-            onComplete?.invoke()
-            return
-        }
+    private fun capturePublicationBackdrop(generation: Long) {
+        if (
+            capturePending || isDestroyed || !latestPreferences.liquidGlassEnabled ||
+            generation != backdropGeneration || chromeDrawn || chromeState.visible ||
+            chromeView?.visibility != View.GONE || backGestureInProgress
+        ) return
         val width = window.decorView.width
         val height = window.decorView.height
-        if (width <= 0 || height <= 0) {
-            onComplete?.invoke()
-            return
-        }
-        capturePending = true
+        if (width <= 0 || height <= 0) return
         val captureScale = minOf(1f, MAX_CAPTURE_DIMENSION / maxOf(width, height).toFloat())
         val captureWidth = maxOf(1, (width * captureScale).toInt())
         val captureHeight = maxOf(1, (height * captureScale).toInt())
-        val index = captureIndex
-        var bitmap = captureBitmaps[index]
-        if (bitmap == null || bitmap.isRecycled || bitmap.width != captureWidth || bitmap.height != captureHeight) {
-            bitmap = try {
-                Bitmap.createBitmap(captureWidth, captureHeight, Bitmap.Config.ARGB_8888)
-            } catch (_: Throwable) {
-                null
-            }
-            captureBitmaps[index] = bitmap
-        }
-        if (bitmap == null) {
-            capturePending = false
-            publicationBackdrop.clear()
-            onComplete?.invoke()
+        // This buffer belongs exclusively to this request until its callback completes.
+        val bitmap = try {
+            Bitmap.createBitmap(captureWidth, captureHeight, Bitmap.Config.ARGB_8888)
+        } catch (_: OutOfMemoryError) {
             return
         }
+        capturePending = true
+        lastBackdropRefreshAt = SystemClock.uptimeMillis()
         try {
             val listener = PixelCopy.OnPixelCopyFinishedListener { result ->
                 capturePending = false
-                if (isDestroyed) return@OnPixelCopyFinishedListener
-                if (result == PixelCopy.SUCCESS) {
-                    captureIndex = (index + 1) % captureBitmaps.size
-                    val recycled = publicationBackdrop.setBitmap(bitmap, width, height)
-                    if (recycled != null) {
-                        // The backdrop recycled the previous buffer; drop any
-                        // capture-pool slot that still references it so the
-                        // next capture allocates a fresh bitmap instead of
-                        // handing a recycled one to PixelCopy.
-                        for (i in captureBitmaps.indices) {
-                            if (captureBitmaps[i] === recycled) captureBitmaps[i] = null
-                        }
-                    }
+                if (
+                    result == PixelCopy.SUCCESS && !isDestroyed &&
+                    generation == backdropGeneration && latestPreferences.liquidGlassEnabled &&
+                    !chromeDrawn && !chromeState.visible && chromeView?.visibility == View.GONE &&
+                    width == window.decorView.width && height == window.decorView.height
+                ) {
+                    publicationBackdrop.setBitmap(bitmap, width, height)
+                    backdropDirty = false
                 } else {
-                    publicationBackdrop.clear()
+                    // Only an unpublished, completed buffer can be recycled safely.
+                    bitmap.recycle()
                 }
-                onComplete?.invoke()
+                if (!isDestroyed && generation != backdropGeneration) scheduleBackdropCapture()
             }
             PixelCopy.request(
                 window,
@@ -1017,40 +1109,24 @@ class ReaderActivity : FragmentActivity() {
             )
         } catch (_: Exception) {
             capturePending = false
-            publicationBackdrop.clear()
-            onComplete?.invoke()
+            bitmap.recycle()
         }
     }
 
     private fun parseTextPosition(progression: String?): TextPosition {
-        val normalized = progression
-            ?.takeIf { it.startsWith(TXT_PROGRESSION_V2_PREFIX) }
-            ?.removePrefix(TXT_PROGRESSION_V2_PREFIX)
-            ?.split(':', limit = 2)
-        if (normalized != null) {
-            val fraction = normalized.getOrNull(1)
-                ?.toFloatOrNull()
-                ?.takeIf { it.isFinite() }
-                ?.coerceIn(0f, 1f)
-                ?: 0f
-            return TextPosition(
-                itemIndex = normalized.getOrNull(0)?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
-                scrollOffset = 0,
-                offsetFraction = fraction,
-            )
-        }
-        val legacy = progression
-            ?.takeIf { it.startsWith(TXT_PROGRESSION_PREFIX) }
-            ?.removePrefix(TXT_PROGRESSION_PREFIX)
-            ?.split(':', limit = 2)
+        val saved = decodeTxtReadingProgress(progression)
         return TextPosition(
-            itemIndex = legacy?.getOrNull(0)?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
-            scrollOffset = legacy?.getOrNull(1)?.toIntOrNull()?.coerceAtLeast(0) ?: 0,
+            itemIndex = saved?.itemIndex ?: 0,
+            scrollOffset = saved?.scrollOffset ?: 0,
+            offsetFraction = saved?.offsetFraction ?: 0f,
+            totalFraction = saved?.totalFraction ?: 0f,
         )
     }
 
     private fun showTextContent(book: BookEntity, content: String) {
         currentBookId = book.id
+        readerContentReady = true
+        updateSystemBars(latestPreferences)
         observeBookmarks(book.id)
         if (touchExplorationEnabled) chromeState.show()
         val initialPosition = parseTextPosition(book.progression)
@@ -1094,10 +1170,19 @@ class ReaderActivity : FragmentActivity() {
                     onProgress = { position ->
                         saveProgressionIfAllowed(
                             book.id,
-                            "$TXT_PROGRESSION_V2_PREFIX${position.itemIndex}:" +
-                                position.offsetFraction.coerceIn(0f, 1f),
+                            encodeTxtReadingProgress(position.itemIndex, position.offsetFraction, position.totalFraction),
                         )
                     },
+                    onPositionChanged = { position ->
+                        if (!suppressProgression && !checkpointFrozen) {
+                            lastStableProgression = encodeTxtReadingProgress(
+                                position.itemIndex, position.offsetFraction, position.totalFraction,
+                            )
+                        }
+                    },
+                    onRegisterCheckpoint = { checkpoint -> textCheckpoint = checkpoint },
+                    onChromeVisibilityChanged = ::onReaderChromeVisibilityChanged,
+                    onBackGestureChanged = ::onReaderBackGestureChanged,
                     onBack = ::finish,
                     onFontFamilyChange = ::updateFontFamily,
                     onFontScaleChange = ::updateFontScale,
@@ -1283,31 +1368,31 @@ class ReaderActivity : FragmentActivity() {
             lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 readerSettings.preferences.collectLatest { preferences ->
                     latestPreferences = preferences
-                    if (!preferences.liquidGlassEnabled) publicationBackdrop.clear()
+                    updatePublicationBackground(preferences)
                     if (supportsTypography) {
                         epubNavigator?.submitPreferences(preferences.toEpubPreferences())
-                        cachedBackgroundDataUri = loadBackgroundDataUri(preferences)
                         applyEpubPageStyle(preferences)
                     }
+                    refreshPublicationBackdrop()
                 }
             }
         }
     }
 
-    private suspend fun loadBackgroundDataUri(preferences: ReaderPreferences): String? {
+    private suspend fun loadBackgroundDataUri(preferences: ReaderPreferences): BackgroundDataUri? {
         val path = preferences.readerBackgroundPath
             ?.takeIf { preferences.readerBackgroundMode == ReaderBackgroundMode.IMAGE }
             ?: return null
         val file = File(path)
         val signature = "$path:${file.length()}:${file.lastModified()}"
-        if (signature == cachedBackgroundSignature && cachedBackgroundDataUri != null) {
-            return cachedBackgroundDataUri
-        }
+        cachedBackgroundImage?.takeIf { it.signature == signature }?.let { return it }
         return withContext(Dispatchers.IO) {
             try {
                 val bytes = file.readBytes()
-                cachedBackgroundSignature = signature
-                "data:image/webp;base64,${android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)}"
+                BackgroundDataUri(
+                    signature = signature,
+                    uri = "data:image/webp;base64,${android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)}",
+                )
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
@@ -1318,31 +1403,41 @@ class ReaderActivity : FragmentActivity() {
 
     private suspend fun applyEpubPageStyle(preferences: ReaderPreferences) {
         val epub = epubNavigator ?: return
-        val imageDataUri = loadBackgroundDataUri(preferences)
-        cachedBackgroundDataUri = imageDataUri
+        if (publication?.metadata?.layout == Layout.FIXED) return
+        val generation = ++pageStyleGeneration
+        val backgroundImage = loadBackgroundDataUri(preferences)
+        if (generation != pageStyleGeneration || preferences != latestPreferences) return
         val script = buildEpubPageStyleScript(
             preferences = preferences,
-            imageDataUri = imageDataUri,
+            imageDataUri = backgroundImage?.uri,
             fallbackDark = isDark(preferences.themeMode),
+            generation = generation,
         )
-        try {
-            epub.evaluateJavascript(script)
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            // The data-URI script can exceed the binder transaction limit or a
-            // page transition can remove the WebView. Retry without the image:
-            // the no-image style falls back to a readable light page instead of
-            // leaving the forced-dark theme on a black void.
-            val fallbackScript = buildEpubPageStyleScript(
-                preferences = preferences,
-                imageDataUri = null,
-                fallbackDark = isDark(preferences.themeMode),
-            )
+        pageStyleMutex.withLock {
+            if (generation != pageStyleGeneration || preferences != latestPreferences || epub !== epubNavigator) return
+            cachedBackgroundImage = backgroundImage
             try {
-                epub.evaluateJavascript(fallbackScript)
+                epub.evaluateJavascript(script)
+            } catch (error: CancellationException) {
+                throw error
             } catch (_: Exception) {
-                // Even the fallback failed; the page keeps its default style.
+                // The data-URI script can exceed the binder transaction limit or a
+                // page transition can remove the WebView. Retry without the image.
+                val fallbackScript = buildEpubPageStyleScript(
+                    preferences = preferences,
+                    imageDataUri = null,
+                    fallbackDark = isDark(preferences.themeMode),
+                    generation = generation,
+                )
+                try {
+                    if (generation == pageStyleGeneration && preferences == latestPreferences) {
+                        epub.evaluateJavascript(fallbackScript)
+                    }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    // Even the fallback failed; the page keeps its default style.
+                }
             }
         }
     }
@@ -1426,6 +1521,7 @@ class ReaderActivity : FragmentActivity() {
         applied: (ReaderPreferences) -> Boolean,
     ) {
         typographyGeneration++
+        refreshPublicationBackdrop()
         val generation = typographyGeneration
         typographyRestoreJob?.cancel()
         suppressProgression = true
@@ -1507,34 +1603,87 @@ class ReaderActivity : FragmentActivity() {
             isAppearanceLightStatusBars = !darkBackground
             isAppearanceLightNavigationBars = !darkBackground
         }
-        hideStatusBar()
+        applyReaderSystemBars()
     }
 
     private fun hideStatusBar() {
+        applyReaderSystemBars()
+    }
+
+    private fun onReaderChromeVisibilityChanged(visible: Boolean) {
+        chromeDrawn = visible
+        applyReaderSystemBars()
+    }
+
+    private fun onReaderBackGestureChanged(active: Boolean) {
+        backGestureInProgress = active
+        if (!active) {
+            applyReaderSystemBars()
+            scheduleBackdropCapture()
+        }
+    }
+
+    private fun applyReaderSystemBars() {
+        if (backGestureInProgress) return
+        val showNavigation = !readerContentReady || chromeDrawn || chromeState.visible || touchExplorationEnabled
         WindowCompat.getInsetsController(window, window.decorView).apply {
             hide(WindowInsetsCompat.Type.statusBars())
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (showNavigation) {
+                show(WindowInsetsCompat.Type.navigationBars())
+            } else {
+                hide(WindowInsetsCompat.Type.navigationBars())
+            }
+        }
+        if (navigationBarsVisible != showNavigation) {
+            navigationBarsVisible = showNavigation
+            // Keep the last clean page available under the controls. Once the
+            // controls exit we invalidate it and capture the new viewport.
+            refreshPublicationBackdrop(clearSnapshot = !showNavigation)
         }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideStatusBar()
+        if (hasFocus) applyReaderSystemBars()
+    }
+
+    override fun onStop() {
+        // Native predictive back remains unhandled when chrome is hidden. Save from
+        // lifecycle checkpoints rather than intercepting the cross-activity animation.
+        if (suppressProgression) {
+            lastStableProgression?.let { saveProgressionIfAllowed(currentBookId, it, finalCheckpoint = true) }
+        } else {
+            textCheckpoint?.invoke()
+            navigator?.currentLocator?.value?.let { locator ->
+                saveProgressionIfAllowed(currentBookId, locator.toJSON().toString(), finalCheckpoint = true)
+            }
+            if (navigator == null) {
+                lastStableProgression?.let { saveProgressionIfAllowed(currentBookId, it, finalCheckpoint = true) }
+            }
+        }
+        super.onStop()
     }
 
     override fun onDestroy() {
+        // onStop has already submitted its last stable checkpoint. Disposing a
+        // reflowing TXT composition must not replace that app-scoped write.
+        checkpointFrozen = true
         narrationBuildJob?.cancel()
         typographyRestoreJob?.cancel()
+        backdropCaptureJob?.cancel()
+        wallpaperJob?.cancel()
+        backdropGeneration++
+        pageStyleGeneration++
         pendingNarrationStart = null
         super.onDestroy()
         chromeView = null
         navigator = null
         epubNavigator = null
-        captureBitmaps.forEach { it?.recycle() }
-        captureBitmaps = arrayOf(null, null)
         publication?.close()
         publication = null
-        publicationBackdrop.clear()
+        publicationBackdrop.setBackground(Color.Black)
+        textCheckpoint = null
     }
 
     companion object {
@@ -1542,13 +1691,10 @@ class ReaderActivity : FragmentActivity() {
         private const val NAVIGATOR_TAG = "readium_navigator"
         private const val MAX_TEXT_LENGTH = 16 * 1024 * 1024
         private const val MAX_TEXT_BYTES = 32L * 1024L * 1024L
-        private const val TXT_PROGRESSION_PREFIX = "txt:"
-        private const val TXT_PROGRESSION_V2_PREFIX = "txt2:"
         private const val CHROME_TAP_REGION_TOP = 0.10f
         private const val CHROME_TAP_REGION_BOTTOM = 0.24f
         private const val MAX_CAPTURE_DIMENSION = 1280
         private const val BACKDROP_REFRESH_MIN_INTERVAL_MILLIS = 400L
-        private const val BACKDROP_REFRESH_CAPTURE_DELAY_MILLIS = 32L
         private const val NARRATION_DECORATION_GROUP = "narration"
         private const val TYPOGRAPHY_PREFERENCE_TIMEOUT_MILLIS = 2_000L
         private const val TYPOGRAPHY_RESTORE_DELAY_MILLIS = 450L
@@ -1595,6 +1741,10 @@ private fun TextReaderScreen(
     onToggleTxtBookmark: (Int, Int) -> Unit,
     onBookmarkDelete: (BookmarkEntity) -> Unit,
     onProgress: (TextPosition) -> Unit,
+    onPositionChanged: (TextPosition) -> Unit,
+    onRegisterCheckpoint: ((() -> Unit)?) -> Unit,
+    onChromeVisibilityChanged: (Boolean) -> Unit,
+    onBackGestureChanged: (Boolean) -> Unit,
     onBack: () -> Unit,
     onFontFamilyChange: (ReaderFontFamily) -> Unit,
     onFontScaleChange: (Float) -> Unit,
@@ -1622,6 +1772,26 @@ private fun TextReaderScreen(
             initialPosition.scrollOffset
         },
     )
+    var initialPositionRestored by remember { mutableStateOf(false) }
+    val saveProgress by rememberUpdatedState(onProgress)
+    val positionChanged by rememberUpdatedState(onPositionChanged)
+    fun currentPosition(): TextPosition? {
+        if (!initialPositionRestored || listState.layoutInfo.totalItemsCount == 0) return null
+        val itemSize = listState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.index == listState.firstVisibleItemIndex }?.size ?: return null
+        if (itemSize <= 0) return null
+        val offsetFraction = (listState.firstVisibleItemScrollOffset.toFloat() / itemSize).coerceIn(0f, 1f)
+        return TextPosition(
+            itemIndex = listState.firstVisibleItemIndex,
+            scrollOffset = listState.firstVisibleItemScrollOffset,
+            offsetFraction = offsetFraction,
+            totalFraction = textProgression(
+                chunks, chunkStartOffsets, totalCharacterCount,
+                listState.firstVisibleItemIndex, offsetFraction,
+                isAtEnd = content.isNotEmpty() && !listState.canScrollForward,
+            ),
+        )
+    }
     val backdrop = rememberLayerBackdrop()
     val typographySignature = listOf(
         preferences.fontFamily,
@@ -1650,50 +1820,34 @@ private fun TextReaderScreen(
         if (initialPosition.offsetFraction > 0f) {
             val itemSize = snapshotFlow {
                 listState.layoutInfo.visibleItemsInfo
-                    .firstOrNull { it.index == initialItem }
-                    ?.size
-                    ?: 0
+                    .firstOrNull { it.index == initialItem }?.size ?: 0
             }.first { it > 0 }
             listState.scrollToItem(
                 initialItem,
                 (itemSize * initialPosition.offsetFraction).roundToInt().coerceAtLeast(0),
             )
+        } else {
+            // Legacy pixel offsets may normalize past the requested item after
+            // a font-size change. A measured visible item is enough to save it.
+            snapshotFlow {
+                listState.layoutInfo.visibleItemsInfo.any { it.size > 0 }
+            }.first { it }
         }
+        initialPositionRestored = true
     }
     LaunchedEffect(listState, chunks, chunkStartOffsets, totalCharacterCount) {
-        snapshotFlow {
-            val firstItemSize = listState.layoutInfo.visibleItemsInfo.firstOrNull()?.size ?: 0
-            val offsetFraction = if (firstItemSize > 0) {
-                listState.firstVisibleItemScrollOffset.toFloat() / firstItemSize
-            } else {
-                0f
-            }
-            TextScrollSnapshot(
-                position = TextPosition(
-                    itemIndex = listState.firstVisibleItemIndex,
-                    scrollOffset = listState.firstVisibleItemScrollOffset,
-                    offsetFraction = offsetFraction.coerceIn(0f, 1f),
-                ),
-                isAtEnd = !listState.canScrollForward,
-            )
-        }
+        snapshotFlow { currentPosition() }
+            .filterNotNull()
             .distinctUntilChanged()
-            .collectLatest { snapshot ->
-                val position = snapshot.position
-                val progression = textProgression(
-                    chunks = chunks,
-                    chunkStartOffsets = chunkStartOffsets,
-                    totalCharacterCount = totalCharacterCount,
-                    itemIndex = position.itemIndex,
-                    offsetFraction = position.offsetFraction,
-                    isAtEnd = snapshot.isAtEnd,
-                )
+            .collectLatest { position ->
+                val progression = position.totalFraction
                 progressLabel = ReaderPositionLabel(
                     textProgressLabel(progression),
                     fraction = progression,
                 )
+                positionChanged(position)
                 delay(750)
-                onProgress(position)
+                saveProgress(position)
             }
     }
     fun currentTextOffset(): Int {
@@ -1733,20 +1887,16 @@ private fun TextReaderScreen(
         )
     }
     DisposableEffect(listState, chunks.size) {
-        onDispose {
-            val itemSize = listState.layoutInfo.visibleItemsInfo.firstOrNull()?.size ?: 0
-            val offsetFraction = if (itemSize > 0) {
-                listState.firstVisibleItemScrollOffset.toFloat() / itemSize
-            } else {
-                0f
+        val checkpoint: () -> Unit = {
+            currentPosition()?.let { position ->
+                positionChanged(position)
+                saveProgress(position)
             }
-            onProgress(
-                TextPosition(
-                    itemIndex = listState.firstVisibleItemIndex,
-                    scrollOffset = listState.firstVisibleItemScrollOffset,
-                    offsetFraction = offsetFraction.coerceIn(0f, 1f),
-                ),
-            )
+        }
+        onRegisterCheckpoint(checkpoint)
+        onDispose {
+            checkpoint()
+            onRegisterCheckpoint(null)
         }
     }
     val seekScope = rememberCoroutineScope()
@@ -1963,6 +2113,8 @@ private fun TextReaderScreen(
             onClearBackground = onClearBackground,
             onBackgroundScrimChange = onBackgroundScrimChange,
             autoHideEnabled = autoHideEnabled,
+            onVisibilityChanged = onChromeVisibilityChanged,
+            onBackGestureChanged = onBackGestureChanged,
             onSeekFraction = { fraction ->
                 if (narrationState.isActive) onNarrationStop()
                 seekTo(fraction)
@@ -2044,11 +2196,7 @@ private data class TextPosition(
     val itemIndex: Int,
     val scrollOffset: Int,
     val offsetFraction: Float = 0f,
-)
-
-private data class TextScrollSnapshot(
-    val position: TextPosition,
-    val isAtEnd: Boolean,
+    val totalFraction: Float = 0f,
 )
 
 private fun textProgression(
