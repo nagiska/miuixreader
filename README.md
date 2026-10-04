@@ -8,7 +8,7 @@ A local-first Android reader with a Xiaomi HyperOS-inspired interface.
 - Multi-select import through the Android Storage Access Framework
 - Open EPUB, TXT, PDF, CBZ, and ZIP files shared from other apps
 - Persistent local library with duplicate detection and reading progress
-- A larger recently-read book card and whole-book progress on every bookshelf card
+- A larger recently-read book card with whole-book progress
 - EPUB/CBZ cover extraction and EPUB metadata parsing
 - Library search by title or author, plus metadata and cover editing
 - Tap-to-reveal animated reader controls with page numbers and a draggable progress slider

@@ -713,63 +713,70 @@ private fun BookRowContent(
     onDelete: () -> Unit,
     onEdit: () -> Unit,
 ) {
-    val progress = remember(book.lastOpenedAt, book.progression, book.format) {
-        book.overallReadingProgress()
-    }
-    Column(modifier = Modifier.fillMaxWidth().padding(if (featured) 18.dp else 14.dp)) {
-        if (featured) {
+    if (featured) {
+        val progress = remember(book.lastOpenedAt, book.progression, book.format) {
+            book.overallReadingProgress()
+        }
+        Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
             Text(
                 text = stringResourceCompat(R.string.book_recently_read),
                 color = MiuixTheme.colorScheme.primary,
                 style = MiuixTheme.textStyles.body2.copy(fontWeight = FontWeight.Medium),
                 modifier = Modifier.padding(bottom = 12.dp),
             )
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            BookCover(book = book, featured = featured)
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(
-                    text = book.title,
-                    maxLines = if (featured) 3 else 2,
-                    overflow = TextOverflow.Ellipsis,
-                    style = if (featured) {
-                        MiuixTheme.textStyles.body1.copy(fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                    } else {
-                        MiuixTheme.textStyles.body1.copy(fontWeight = FontWeight.Medium)
-                    },
-                )
-                if (book.author.isNotBlank()) {
-                    Text(book.author, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MiuixTheme.textStyles.body2)
-                }
-                Text(
-                    text = "${book.bookFormat.label} · ${formatBytes(book.sizeBytes)}",
-                    style = MiuixTheme.textStyles.body2,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (!featured) {
-                    BookReadingProgress(progress = progress, neverOpened = book.lastOpenedAt == null)
-                }
-            }
-            Column {
-                IconButton(onClick = onEdit) {
-                    Icon(
-                        MiuixIcons.Edit,
-                        contentDescription = stringResourceCompat(R.string.edit_book_info),
-                    )
-                }
-                IconButton(onClick = onDelete) {
-                    Icon(MiuixIcons.Delete, contentDescription = stringResourceCompat(R.string.delete))
-                }
-            }
-        }
-        if (featured) {
+            BookRowDetails(book = book, featured = true, onDelete = onDelete, onEdit = onEdit)
             Spacer(Modifier.height(14.dp))
             BookReadingProgress(progress = progress, neverOpened = false)
+        }
+    } else {
+        BookRowDetails(book = book, featured = false, onDelete = onDelete, onEdit = onEdit)
+    }
+}
+
+@Composable
+private fun BookRowDetails(
+    book: BookEntity,
+    featured: Boolean,
+    onDelete: () -> Unit,
+    onEdit: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().then(if (featured) Modifier else Modifier.padding(14.dp)),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        BookCover(book = book, featured = featured)
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(
+                text = book.title,
+                maxLines = if (featured) 3 else 2,
+                overflow = TextOverflow.Ellipsis,
+                style = if (featured) {
+                    MiuixTheme.textStyles.body1.copy(fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                } else {
+                    MiuixTheme.textStyles.body1.copy(fontWeight = FontWeight.Medium)
+                },
+            )
+            if (book.author.isNotBlank()) {
+                Text(book.author, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MiuixTheme.textStyles.body2)
+            }
+            Text(
+                text = "${book.bookFormat.label} · ${formatBytes(book.sizeBytes)}",
+                style = MiuixTheme.textStyles.body2,
+                maxLines = if (featured) 1 else Int.MAX_VALUE,
+                overflow = if (featured) TextOverflow.Ellipsis else TextOverflow.Clip,
+            )
+        }
+        Column {
+            IconButton(onClick = onEdit) {
+                Icon(
+                    MiuixIcons.Edit,
+                    contentDescription = stringResourceCompat(R.string.edit_book_info),
+                )
+            }
+            IconButton(onClick = onDelete) {
+                Icon(MiuixIcons.Delete, contentDescription = stringResourceCompat(R.string.delete))
+            }
         }
     }
 }
