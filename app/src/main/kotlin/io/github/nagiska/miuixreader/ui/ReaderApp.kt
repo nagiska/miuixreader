@@ -57,6 +57,8 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -713,10 +715,10 @@ private fun BookRowContent(
     onDelete: () -> Unit,
     onEdit: () -> Unit,
 ) {
+    val progress = remember(book.lastOpenedAt, book.progression, book.format) {
+        book.overallReadingProgress()
+    }
     if (featured) {
-        val progress = remember(book.lastOpenedAt, book.progression, book.format) {
-            book.overallReadingProgress()
-        }
         Column(modifier = Modifier.fillMaxWidth().padding(18.dp)) {
             Text(
                 text = stringResourceCompat(R.string.book_recently_read),
@@ -729,7 +731,18 @@ private fun BookRowContent(
             BookReadingProgress(progress = progress, neverOpened = false)
         }
     } else {
-        BookRowDetails(book = book, featured = false, onDelete = onDelete, onEdit = onEdit)
+        Box(modifier = Modifier.fillMaxWidth()) {
+            BookRowDetails(book = book, featured = false, onDelete = onDelete, onEdit = onEdit)
+            // Keep the bar in the existing bottom padding without affecting the card's measured size.
+            Box(modifier = Modifier.matchParentSize().padding(horizontal = 14.dp, vertical = 4.dp)) {
+                BookReadingProgress(
+                    progress = progress,
+                    neverOpened = book.lastOpenedAt == null,
+                    showLabel = false,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
+            }
+        }
     }
 }
 
@@ -818,18 +831,26 @@ private fun BookCover(book: BookEntity, featured: Boolean) {
 }
 
 @Composable
-private fun BookReadingProgress(progress: Float?, neverOpened: Boolean) {
+private fun BookReadingProgress(
+    progress: Float?,
+    neverOpened: Boolean,
+    showLabel: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
     val label = when {
         neverOpened -> stringResourceCompat(R.string.book_progress_not_started)
         progress == null -> stringResourceCompat(R.string.book_progress_unknown)
         else -> stringResourceCompat(R.string.book_progress_percent, (progress * 100).toInt())
     }
-    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-            text = label,
-            style = MiuixTheme.textStyles.body2,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-        )
+    val progressModifier = if (showLabel) modifier else modifier.semantics { stateDescription = label }
+    Column(modifier = progressModifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (showLabel) {
+            Text(
+                text = label,
+                style = MiuixTheme.textStyles.body2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+        }
         if (progress == null) {
             Box(
                 modifier = Modifier
